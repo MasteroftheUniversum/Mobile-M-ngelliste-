@@ -225,6 +225,35 @@ main.view {
 
 .hint-block { font-size: 0.88rem; color: var(--muted); line-height: 1.55; margin: 8px 0 0; }
 
+.photosize-chooser { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.photosize-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  border: 2px solid var(--border);
+  background: var(--card);
+  border-radius: 14px;
+  padding: 12px 8px;
+  cursor: pointer;
+}
+.photosize-option.selected { border-color: var(--primary); background: #eef2ff; }
+.photosize-preview {
+  width: 100%;
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.photosize-preview img {
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--border);
+  display: block;
+}
+.photosize-label { font-weight: 700; font-size: 0.95rem; }
+.photosize-hint { font-size: 0.75rem; color: var(--muted); text-align: center; }
+
 .error-text { color: var(--red); font-size: 0.92rem; margin-top: 14px; }
 
 .toast {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'maengelliste-v3';
+const CACHE_NAME = 'maengelliste-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const ASSETS = [
   './manifest.json',
   './vendor/jspdf.umd.min.js',
   './vendor/xlsx.full.min.js',
+  './vendor/exceljs.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];

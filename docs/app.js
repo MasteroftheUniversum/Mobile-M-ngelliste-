@@ -13,7 +13,38 @@ const Settings = {
   set email(v) { localStorage.setItem('ml_email', v || ''); },
   get firma() { return localStorage.getItem('ml_firma') || ''; },
   set firma(v) { localStorage.setItem('ml_firma', v || ''); },
+  get photoSize() { return localStorage.getItem('ml_photoSize') || 'mittel'; },
+  set photoSize(v) { localStorage.setItem('ml_photoSize', v); },
 };
+
+/* ---------- Fotogröße (PDF/Excel) ---------- */
+const PHOTO_SIZES = {
+  klein:  { pdfWidth: 80,  xlsxWidth: 70,  perPage: 6, previewPx: 50 },
+  mittel: { pdfWidth: 140, xlsxWidth: 130, perPage: 4, previewPx: 85 },
+  gross:  { pdfWidth: 200, xlsxWidth: 200, perPage: 3, previewPx: 120 },
+};
+
+function renderPhotoSizeChooser() {
+  const sample = cache.find(e => e.photo)?.photo || null;
+  const selected = Settings.photoSize;
+  document.querySelectorAll('.photosize-option').forEach(btn => {
+    const size = btn.dataset.size;
+    const cfg = PHOTO_SIZES[size];
+    btn.classList.toggle('selected', size === selected);
+    const preview = btn.querySelector('.photosize-preview');
+    preview.innerHTML = sample
+      ? `<img src="${sample}" style="width:${cfg.previewPx}px;height:${cfg.previewPx}px">`
+      : `<div style="width:${cfg.previewPx}px;height:${cfg.previewPx}px;background:var(--border);border-radius:8px"></div>`;
+    btn.querySelector('.photosize-hint').textContent = `ca. ${cfg.perPage} / PDF-Seite`;
+  });
+}
+
+document.querySelectorAll('.photosize-option').forEach(btn => {
+  btn.addEventListener('click', () => {
+    Settings.photoSize = btn.dataset.size;
+    renderPhotoSizeChooser();
+  });
+});
 
 /* ---------- History (Dropdown-Vorschläge für Ort/Bereich und Beschreibung) ---------- */
 const HISTORY_LIMIT = 60;
@@ -272,6 +303,7 @@ document.getElementById('editorSave').addEventListener('click', async () => {
 document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('emailInput').value = Settings.email;
   document.getElementById('firmaInput').value = Settings.firma;
+  renderPhotoSizeChooser();
   showView('settings');
 });
 document.getElementById('settingsCancel').addEventListener('click', () => showView('list'));
@@ -291,10 +323,13 @@ function buildPdf() {
   const margin = 40;
   let y = margin;
 
+  const photoWidth = PHOTO_SIZES[Settings.photoSize].pdfWidth;
+
   const title = Settings.firma ? `Mängelliste – ${Settings.firma}` : 'Mängelliste';
   doc.setFontSize(18);
-  doc.text(title, margin, y);
-  y += 18;
+  const titleLines = doc.splitTextToSize(title, pageW - 2 * margin);
+  doc.text(titleLines, margin, y);
+  y += titleLines.length * 21;
   doc.setFontSize(10);
   doc.setTextColor(120);
   doc.text(`Erstellt am ${new Date().toLocaleDateString('de-DE')} · ${cache.length} Punkt(e)`, margin, y);
@@ -302,7 +337,7 @@ function buildPdf() {
   y += 26;
 
   cache.forEach((entry, idx) => {
-    const blockPhotoH = entry.photo ? 160 : 0;
+    const blockPhotoH = entry.photo ? photoWidth : 0;
     const estBlockH = 30 + blockPhotoH + 60;
     if (y + estBlockH > pageH - margin) { doc.addPage(); y = margin; }
 
@@ -319,8 +354,7 @@ function buildPdf() {
     if (entry.photo) {
       try {
         const props = doc.getImageProperties(entry.photo);
-        const maxW = 160;
-        const w = maxW;
+        const w = photoWidth;
         const h = (props.height / props.width) * w;
         doc.addImage(entry.photo, 'JPEG', margin, y, w, h);
         const textX = margin + w + 14;
@@ -361,24 +395,87 @@ document.getElementById('exportPdfBtn').addEventListener('click', () => {
   doc.save(pdfFileName());
 });
 
-/* ---------- Export: Excel ---------- */
-document.getElementById('exportXlsxBtn').addEventListener('click', () => {
-  if (cache.length === 0) return showToast('Keine Einträge vorhanden.');
-  const rows = cache.map((e, i) => ({
-    'Nr.': i + 1,
-    'Datum': formatDate(e.timestamp),
-    'Ort / Bereich': e.ort || '',
-    'Beschreibung': e.rohtext,
-    'Foto vorhanden': e.photo ? 'Ja' : 'Nein',
-  }));
-  const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{ wch: 5 }, { wch: 12 }, { wch: 18 }, { wch: 60 }, { wch: 12 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Mängelliste');
+/* ---------- Datei-Download-Helfer ---------- */
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function getImageDimensions(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+function xlsxFileName() {
   const stamp = new Date().toISOString().slice(0, 10);
   const base = (Settings.firma || 'Maengelliste').replace(/[^a-z0-9äöüß_\- ]/gi, '').trim() || 'Maengelliste';
-  XLSX.writeFile(wb, `${base}_${stamp}.xlsx`);
-  showToast('Hinweis: Fotos sind nur im PDF-Export enthalten.', 4000);
+  return `${base}_${stamp}.xlsx`;
+}
+
+/* ---------- Export: Excel (mit eingebetteten Fotos) ---------- */
+document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
+  if (cache.length === 0) return showToast('Keine Einträge vorhanden.');
+  showToast('Excel wird erstellt …', 2000);
+
+  const imgW = PHOTO_SIZES[Settings.photoSize].xlsxWidth;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Mängelliste');
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  ws.columns = [
+    { header: 'Nr.', key: 'nr', width: 6 },
+    { header: 'Datum', key: 'datum', width: 12 },
+    { header: 'Ort / Bereich', key: 'ort', width: 20 },
+    { header: 'Beschreibung', key: 'beschreibung', width: 45 },
+    { header: 'Foto', key: 'foto', width: Math.max(10, Math.round(imgW / 7)) },
+  ];
+  const headerRow = ws.getRow(1);
+  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+  headerRow.alignment = { vertical: 'middle' };
+
+  for (let i = 0; i < cache.length; i++) {
+    const e = cache[i];
+    const row = ws.addRow({ nr: i + 1, datum: formatDate(e.timestamp), ort: e.ort || '', beschreibung: e.rohtext, foto: e.photo ? '' : '–' });
+    row.alignment = { vertical: 'middle', wrapText: true };
+    row.eachCell(cell => {
+      cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
+    });
+
+    if (e.photo) {
+      try {
+        const dims = await getImageDimensions(e.photo);
+        const imgH = imgW * (dims.height / dims.width);
+        const imageId = wb.addImage({
+          base64: e.photo,
+          extension: 'jpeg',
+        });
+        ws.addImage(imageId, {
+          tl: { col: 4, row: row.number - 1 },
+          ext: { width: imgW, height: imgH },
+        });
+        row.height = Math.max(20, imgH * 0.75);
+      } catch (err) {
+        row.height = 20;
+      }
+    } else {
+      row.height = 20;
+    }
+  }
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  downloadBlob(blob, xlsxFileName());
+  showToast('Excel-Datei mit Fotos gespeichert.');
 });
 
 /* ---------- Backup: Sichern (JSON inkl. Fotos) ---------- */
@@ -397,14 +494,7 @@ document.getElementById('backupSaveBtn').addEventListener('click', () => {
     entries: cache,
   };
   const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = backupFileName();
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, backupFileName());
   showToast('Backup gespeichert (inkl. Fotos).');
 });
 

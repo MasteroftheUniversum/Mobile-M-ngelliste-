@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2563eb">
+<title>Mängelliste</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <h1>📋 Mängelliste</h1>
+  <button id="settingsBtn" class="icon-btn" title="Einstellungen" aria-label="Einstellungen">⚙️</button>
+</header>
+
+<main id="listView" class="view">
+  <div id="emptyState" class="empty-state">
+    <p>Noch keine Mängel erfasst.</p>
+    <p>Tippe unten auf <strong>+</strong>, um den ersten Mangel mit Foto aufzunehmen.</p>
+  </div>
+  <ul id="entryList" class="entry-list"></ul>
+</main>
+
+<div id="exportBar" class="export-bar hidden">
+  <button id="exportPdfBtn" class="pill-btn">📄 PDF</button>
+  <button id="exportXlsxBtn" class="pill-btn">📊 Excel</button>
+  <button id="exportEmailBtn" class="pill-btn pill-primary">✉️ E-Mail senden</button>
+</div>
+
+<button id="addBtn" class="fab" aria-label="Neuen Mangel erfassen">+</button>
+
+<!-- Entry editor -->
+<section id="editorView" class="view sheet hidden">
+  <div class="sheet-header">
+    <button id="editorCancel" class="text-btn">Abbrechen</button>
+    <h2>Neuer Mangel</h2>
+    <button id="editorSave" class="text-btn text-btn-primary" disabled>Speichern</button>
+  </div>
+
+  <div class="sheet-body">
+    <label class="field-label">Foto</label>
+    <div id="photoPreviewWrap" class="photo-preview" tabindex="0">
+      <img id="photoPreview" alt="Foto Vorschau" class="hidden">
+      <div id="photoPlaceholder" class="photo-placeholder">
+        <span class="photo-icon">📷</span>
+        <span>Foto aufnehmen</span>
+      </div>
+    </div>
+    <input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
+
+    <label class="field-label" for="ortInput">Ort / Bereich (optional)</label>
+    <input type="text" id="ortInput" placeholder="z. B. Küche, Bad, Fassade Nord" class="text-input">
+
+    <label class="field-label" for="rohtextInput">Was ist das Problem?</label>
+    <textarea id="rohtextInput" rows="3" placeholder="z. B. Steckdose neben dem Fenster funktioniert nicht"></textarea>
+
+    <button id="rephraseBtn" class="secondary-btn" disabled>✨ Freundlich formulieren</button>
+
+    <div id="friendlyWrap" class="hidden">
+      <label class="field-label" for="friendlyInput">Freundliche Formulierung <span class="hint">(kann angepasst werden)</span></label>
+      <textarea id="friendlyInput" rows="3"></textarea>
+    </div>
+
+    <p id="editorError" class="error-text hidden"></p>
+  </div>
+</section>
+
+<!-- Settings -->
+<section id="settingsView" class="view sheet hidden">
+  <div class="sheet-header">
+    <button id="settingsCancel" class="text-btn">Abbrechen</button>
+    <h2>Einstellungen</h2>
+    <button id="settingsSave" class="text-btn text-btn-primary">Fertig</button>
+  </div>
+  <div class="sheet-body">
+    <label class="field-label" for="apiKeyInput">Anthropic API-Key</label>
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-..." class="text-input" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <p class="hint-block">
+      Der Schlüssel wird <strong>nur auf diesem Gerät</strong> gespeichert (lokal im Browser) und für nichts anderes verwendet
+      als die Umformulierung deiner Mangeltexte. Du bekommst ihn unter
+      <span class="mono">console.anthropic.com</span> → API Keys.
+    </p>
+
+    <label class="field-label" for="emailInput">E-Mail-Adresse für Export (optional)</label>
+    <input type="email" id="emailInput" placeholder="empfaenger@beispiel.de" class="text-input" autocomplete="off">
+    <p class="hint-block">Wird beim E-Mail-Export als Empfänger vorausgefüllt.</p>
+
+    <label class="field-label" for="firmaInput">Absender / Projekt-Titel (optional)</label>
+    <input type="text" id="firmaInput" placeholder="z. B. Wohnung Musterstr. 5" class="text-input">
+  </div>
+</section>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

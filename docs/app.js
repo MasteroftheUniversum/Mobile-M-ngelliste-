@@ -25,7 +25,7 @@ const PHOTO_SIZES = {
 };
 
 function renderPhotoSizeChooser() {
-  const sample = cache.find(e => e.photo)?.photo || null;
+  const sample = cache.find(e => e.photos && e.photos.length)?.photos[0] || null;
   const selected = Settings.photoSize;
   document.querySelectorAll('.photosize-option').forEach(btn => {
     const size = btn.dataset.size;
@@ -64,6 +64,7 @@ function renderDatalist(datalistId, key) {
 function refreshHistoryDatalists() {
   renderDatalist('ortHistoryList', 'ml_ortHistory');
   renderDatalist('rohtextHistoryList', 'ml_rohtextHistory');
+  renderDatalist('gattungHistoryList', 'ml_gattungHistory');
 }
 
 /* ---------- IndexedDB ---------- */
@@ -88,14 +89,28 @@ function openDb() {
   return dbPromise;
 }
 
+function normalizeEntry(e) {
+  const photos = Array.isArray(e.photos) ? e.photos.filter(Boolean).slice(0, 2) : (e.photo ? [e.photo] : []);
+  return {
+    ...e,
+    photos,
+    gattung: e.gattung || '',
+    order: typeof e.order === 'number' ? e.order : e.timestamp,
+  };
+}
+
 async function dbAll() {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const req = tx.objectStore(STORE).getAll();
-    req.onsuccess = () => resolve(req.result.sort((a, b) => a.timestamp - b.timestamp));
+    req.onsuccess = () => resolve(req.result.map(normalizeEntry).sort((a, b) => a.order - b.order));
     req.onerror = () => reject(req.error);
   });
+}
+
+function nextOrder() {
+  return cache.length ? Math.max(...cache.map(e => e.order ?? 0)) + 1 : 0;
 }
 
 async function dbPut(entry) {
@@ -184,13 +199,19 @@ async function refreshList() {
   }
   empty.classList.add('hidden');
   exportBar.classList.remove('hidden');
-  cache.slice().reverse().forEach(entry => {
+  cache.forEach(entry => {
     const li = document.createElement('li');
     li.className = 'entry-card';
+    li.dataset.id = entry.id;
+    const photosHtml = entry.photos.map(p => `<img src="${p}" alt="">`).join('');
     li.innerHTML = `
-      ${entry.photo ? `<img src="${entry.photo}" alt="">` : ''}
+      <span class="drag-handle" title="Ziehen zum Verschieben" aria-label="Ziehen zum Verschieben">≡</span>
+      ${photosHtml ? `<div class="entry-photos">${photosHtml}</div>` : ''}
       <div class="entry-body">
-        ${entry.ort ? `<div class="entry-ort">${escapeHtml(entry.ort)}</div>` : ''}
+        <div class="entry-tags">
+          ${entry.ort ? `<span class="entry-ort">${escapeHtml(entry.ort)}</span>` : ''}
+          ${entry.gattung ? `<span class="entry-gattung">${escapeHtml(entry.gattung)}</span>` : ''}
+        </div>
         <p class="entry-text">${escapeHtml(entry.rohtext)}</p>
         <div class="entry-meta">${formatDate(entry.timestamp)}</div>
       </div>
@@ -205,6 +226,7 @@ async function refreshList() {
         refreshList();
       }
     });
+    makeDraggable(li);
     list.appendChild(li);
   });
 }
@@ -213,16 +235,95 @@ function escapeHtml(s) {
   return (s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/* ---------- Liste per Drag & Drop sortieren ---------- */
+function persistNewOrder() {
+  const ids = Array.from(document.getElementById('entryList').children).map(li => li.dataset.id);
+  ids.forEach((id, idx) => {
+    const entry = cache.find(e => e.id === id);
+    if (entry) entry.order = idx;
+  });
+  cache.sort((a, b) => a.order - b.order);
+  ids.forEach(async (id) => {
+    const entry = cache.find(e => e.id === id);
+    if (entry) await dbPut(entry);
+  });
+}
+
+function makeDraggable(li) {
+  const handle = li.querySelector('.drag-handle');
+  let startY = 0;
+  let pointerId = null;
+
+  function onMove(e) {
+    if (pointerId === null) return;
+    const dy = e.clientY - startY;
+    li.style.transform = `translateY(${dy}px)`;
+
+    li.style.pointerEvents = 'none';
+    const centerX = li.getBoundingClientRect().left + 30;
+    const target = document.elementFromPoint(centerX, e.clientY)?.closest('.entry-card');
+    li.style.pointerEvents = '';
+
+    if (target && target !== li && target.parentElement === li.parentElement) {
+      const rect = target.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      target.parentElement.insertBefore(li, before ? target : target.nextSibling);
+      startY = e.clientY;
+      li.style.transform = 'translateY(0px)';
+    }
+  }
+
+  function onUp() {
+    if (pointerId === null) return;
+    try { handle.releasePointerCapture(pointerId); } catch {}
+    pointerId = null;
+    li.classList.remove('dragging');
+    li.style.transform = '';
+    handle.removeEventListener('pointermove', onMove);
+    handle.removeEventListener('pointerup', onUp);
+    handle.removeEventListener('pointercancel', onUp);
+    persistNewOrder();
+  }
+
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    pointerId = e.pointerId;
+    startY = e.clientY;
+    li.classList.add('dragging');
+    handle.setPointerCapture(pointerId);
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+
 /* ---------- Editor ---------- */
-let currentPhotoDataUrl = null;
+let currentPhotos = [null, null];
 let editingId = null;
 
+function setPhotoSlot(idx, dataUrl) {
+  currentPhotos[idx] = dataUrl;
+  const img = document.getElementById(`photoPreview${idx + 1}`);
+  const placeholder = document.getElementById(`photoPlaceholder${idx + 1}`);
+  const removeBtn = document.getElementById(`photoRemove${idx + 1}`);
+  if (dataUrl) {
+    img.src = dataUrl;
+    img.classList.remove('hidden');
+    placeholder.classList.add('hidden');
+    removeBtn.classList.remove('hidden');
+  } else {
+    img.src = '';
+    img.classList.add('hidden');
+    placeholder.classList.remove('hidden');
+    removeBtn.classList.add('hidden');
+  }
+}
+
 function resetEditor() {
-  currentPhotoDataUrl = null;
-  document.getElementById('photoPreview').classList.add('hidden');
-  document.getElementById('photoPreview').src = '';
-  document.getElementById('photoPlaceholder').classList.remove('hidden');
+  setPhotoSlot(0, null);
+  setPhotoSlot(1, null);
   document.getElementById('ortInput').value = '';
+  document.getElementById('gattungInput').value = '';
   document.getElementById('rohtextInput').value = '';
   document.getElementById('editorError').classList.add('hidden');
   updateEditorState();
@@ -230,15 +331,10 @@ function resetEditor() {
 
 function fillEditor(entry) {
   document.getElementById('ortInput').value = entry.ort || '';
+  document.getElementById('gattungInput').value = entry.gattung || '';
   document.getElementById('rohtextInput').value = entry.rohtext || '';
-  currentPhotoDataUrl = entry.photo || null;
-  const img = document.getElementById('photoPreview');
-  const placeholder = document.getElementById('photoPlaceholder');
-  if (currentPhotoDataUrl) {
-    img.src = currentPhotoDataUrl;
-    img.classList.remove('hidden');
-    placeholder.classList.add('hidden');
-  }
+  setPhotoSlot(0, entry.photos[0] || null);
+  setPhotoSlot(1, entry.photos[1] || null);
 }
 
 function openEditor(entry) {
@@ -259,38 +355,48 @@ function updateEditorState() {
 document.getElementById('addBtn').addEventListener('click', () => openEditor(null));
 document.getElementById('editorCancel').addEventListener('click', () => showView('list'));
 
-document.getElementById('photoPreviewWrap').addEventListener('click', () => {
-  document.getElementById('photoInput').click();
-});
-document.getElementById('photoInput').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  try {
-    currentPhotoDataUrl = await resizeImage(file);
-    const img = document.getElementById('photoPreview');
-    img.src = currentPhotoDataUrl;
-    img.classList.remove('hidden');
-    document.getElementById('photoPlaceholder').classList.add('hidden');
-  } catch (err) {
-    showToast('Foto konnte nicht geladen werden.');
-  }
+[0, 1].forEach(idx => {
+  const n = idx + 1;
+  document.getElementById(`photoPreviewWrap${n}`).addEventListener('click', (e) => {
+    if (e.target.closest('.photo-remove')) return;
+    document.getElementById(`photoInput${n}`).click();
+  });
+  document.getElementById(`photoInput${n}`).addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await resizeImage(file);
+      setPhotoSlot(idx, dataUrl);
+    } catch (err) {
+      showToast('Foto konnte nicht geladen werden.');
+    }
+  });
+  document.getElementById(`photoRemove${n}`).addEventListener('click', (e) => {
+    e.stopPropagation();
+    setPhotoSlot(idx, null);
+  });
 });
 
 document.getElementById('rohtextInput').addEventListener('input', updateEditorState);
 
 document.getElementById('editorSave').addEventListener('click', async () => {
   const ort = document.getElementById('ortInput').value.trim();
+  const gattung = document.getElementById('gattungInput').value.trim();
   const rohtext = document.getElementById('rohtextInput').value.trim();
   const existing = editingId ? cache.find(e => e.id === editingId) : null;
   const entry = {
     id: editingId || uid(),
     timestamp: existing ? existing.timestamp : Date.now(),
+    order: existing ? existing.order : nextOrder(),
     ort,
+    gattung,
     rohtext,
-    photo: currentPhotoDataUrl,
+    photos: currentPhotos.filter(Boolean),
   };
   await dbPut(entry);
   addHistory('ml_ortHistory', ort);
+  addHistory('ml_gattungHistory', gattung);
   addHistory('ml_rohtextHistory', rohtext);
   const wasEditing = !!editingId;
   editingId = null;
@@ -336,14 +442,26 @@ function buildPdf() {
   doc.setTextColor(20);
   y += 26;
 
+  const photoGap = 8;
+
   cache.forEach((entry, idx) => {
-    const blockPhotoH = entry.photo ? photoWidth : 0;
-    const estBlockH = 30 + blockPhotoH + 60;
+    const photoBlocks = [];
+    (entry.photos || []).forEach(p => {
+      try {
+        const props = doc.getImageProperties(p);
+        photoBlocks.push({ photo: p, h: (props.height / props.width) * photoWidth });
+      } catch (e) { /* Foto nicht lesbar, überspringen */ }
+    });
+    const colH = photoBlocks.reduce((sum, b) => sum + b.h, 0) + (photoBlocks.length > 1 ? photoGap : 0);
+
+    const estBlockH = 30 + colH + 60;
     if (y + estBlockH > pageH - margin) { doc.addPage(); y = margin; }
 
     doc.setFontSize(12);
     doc.setFont(undefined, 'bold');
-    doc.text(`${idx + 1}. ${entry.ort || 'Ohne Ortsangabe'}`, margin, y);
+    const headerParts = [entry.ort || 'Ohne Ortsangabe'];
+    if (entry.gattung) headerParts.push(entry.gattung);
+    doc.text(`${idx + 1}. ${headerParts.join(' · ')}`, margin, y);
     doc.setFont(undefined, 'normal');
     doc.setFontSize(9);
     doc.setTextColor(130);
@@ -351,30 +469,19 @@ function buildPdf() {
     doc.setTextColor(20);
     y += 14;
 
-    if (entry.photo) {
-      try {
-        const props = doc.getImageProperties(entry.photo);
-        const w = photoWidth;
-        const h = (props.height / props.width) * w;
-        doc.addImage(entry.photo, 'JPEG', margin, y, w, h);
-        const textX = margin + w + 14;
-        const textW = pageW - margin - textX;
-        doc.setFontSize(11);
-        const lines = doc.splitTextToSize(entry.rohtext, textW);
-        doc.text(lines, textX, y + 12);
-        y += Math.max(h, lines.length * 13) + 20;
-      } catch (e) {
-        doc.setFontSize(11);
-        const lines = doc.splitTextToSize(entry.rohtext, pageW - 2 * margin);
-        doc.text(lines, margin, y + 12);
-        y += lines.length * 13 + 20;
-      }
-    } else {
-      doc.setFontSize(11);
-      const lines = doc.splitTextToSize(entry.rohtext, pageW - 2 * margin);
-      doc.text(lines, margin, y + 12);
-      y += lines.length * 13 + 20;
-    }
+    const textX = photoBlocks.length ? margin + photoWidth + 14 : margin;
+    const textW = pageW - margin - textX;
+    doc.setFontSize(11);
+    const lines = doc.splitTextToSize(entry.rohtext, textW);
+    doc.text(lines, textX, y + 12);
+
+    let imgY = y;
+    photoBlocks.forEach(b => {
+      try { doc.addImage(b.photo, 'JPEG', margin, imgY, photoWidth, b.h); } catch (e) {}
+      imgY += b.h + photoGap;
+    });
+
+    y += Math.max(colH, lines.length * 13) + 20;
 
     doc.setDrawColor(225);
     doc.line(margin, y - 8, pageW - margin, y - 8);
@@ -429,47 +536,89 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
 
   const imgW = PHOTO_SIZES[Settings.photoSize].xlsxWidth;
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('Mängelliste');
-  ws.views = [{ state: 'frozen', ySplit: 1 }];
-  ws.columns = [
-    { header: 'Nr.', key: 'nr', width: 6 },
-    { header: 'Datum', key: 'datum', width: 12 },
-    { header: 'Ort / Bereich', key: 'ort', width: 20 },
-    { header: 'Beschreibung', key: 'beschreibung', width: 45 },
-    { header: 'Foto', key: 'foto', width: Math.max(10, Math.round(imgW / 7)) },
+  const ws = wb.addWorksheet('Mängelliste', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+  });
+
+  const photoColW = Math.max(10, Math.round(imgW / 7));
+  const columns = [
+    { key: 'nr', width: 6 },
+    { key: 'gattung', width: 16 },
+    { key: 'ort', width: 18 },
+    { key: 'beschreibung', width: 45 },
+    { key: 'foto1', width: photoColW },
+    { key: 'foto2', width: photoColW },
+    { key: 'datum', width: 12 },
   ];
-  const headerRow = ws.getRow(1);
+  ws.columns = columns;
+  const colCount = columns.length;
+
+  ws.mergeCells(1, 1, 1, colCount);
+  const titleCell = ws.getCell(1, 1);
+  titleCell.value = Settings.firma ? `Mängelliste – ${Settings.firma}` : 'Mängelliste';
+  titleCell.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
+  titleCell.alignment = { vertical: 'middle' };
+  ws.getRow(1).height = 28;
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
+
+  ws.mergeCells(2, 1, 2, colCount);
+  const subCell = ws.getCell(2, 1);
+  subCell.value = `Erstellt am ${new Date().toLocaleDateString('de-DE')} · ${cache.length} Punkt(e)`;
+  subCell.font = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
+  subCell.alignment = { vertical: 'middle' };
+  ws.getRow(2).height = 18;
+  ws.getRow(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+
+  const headerRowIdx = 3;
+  const headerRow = ws.getRow(headerRowIdx);
+  headerRow.values = ['Nr.', 'Arbeitsgattung', 'Ort / Bereich', 'Beschreibung', 'Foto 1', 'Foto 2', 'Datum'];
   headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
   headerRow.alignment = { vertical: 'middle' };
+  headerRow.height = 20;
+
+  ws.views = [{ state: 'frozen', ySplit: headerRowIdx }];
+  ws.autoFilter = { from: { row: headerRowIdx, column: 1 }, to: { row: headerRowIdx, column: colCount } };
+
+  const thinBorder = { style: 'thin', color: { argb: 'FFE2E8F0' } };
 
   for (let i = 0; i < cache.length; i++) {
     const e = cache[i];
-    const row = ws.addRow({ nr: i + 1, datum: formatDate(e.timestamp), ort: e.ort || '', beschreibung: e.rohtext, foto: e.photo ? '' : '–' });
+    const rowIdx = headerRowIdx + 1 + i;
+    const row = ws.getRow(rowIdx);
+    row.values = {
+      nr: i + 1,
+      gattung: e.gattung || '',
+      ort: e.ort || '',
+      beschreibung: e.rohtext,
+      foto1: e.photos[0] ? '' : '–',
+      foto2: e.photos[1] ? '' : '–',
+      datum: formatDate(e.timestamp),
+    };
     row.alignment = { vertical: 'middle', wrapText: true };
-    row.eachCell(cell => {
-      cell.border = { bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } } };
+    row.eachCell({ includeEmpty: true }, cell => {
+      cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
     });
-
-    if (e.photo) {
-      try {
-        const dims = await getImageDimensions(e.photo);
-        const imgH = imgW * (dims.height / dims.width);
-        const imageId = wb.addImage({
-          base64: e.photo,
-          extension: 'jpeg',
-        });
-        ws.addImage(imageId, {
-          tl: { col: 4, row: row.number - 1 },
-          ext: { width: imgW, height: imgH },
-        });
-        row.height = Math.max(20, imgH * 0.75);
-      } catch (err) {
-        row.height = 20;
-      }
-    } else {
-      row.height = 20;
+    if (i % 2 === 1) {
+      row.eachCell({ includeEmpty: true }, cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F6FB' } };
+      });
     }
+
+    let maxImgH = 20;
+    for (const [photoIdx, colKey] of [[0, 'foto1'], [1, 'foto2']]) {
+      const photo = e.photos[photoIdx];
+      if (!photo) continue;
+      try {
+        const dims = await getImageDimensions(photo);
+        const imgH = imgW * (dims.height / dims.width);
+        const imageId = wb.addImage({ base64: photo, extension: 'jpeg' });
+        const colIndex = columns.findIndex(c => c.key === colKey);
+        ws.addImage(imageId, { tl: { col: colIndex, row: rowIdx - 1 }, ext: { width: imgW, height: imgH } });
+        maxImgH = Math.max(maxImgH, imgH * 0.75);
+      } catch (err) { /* Foto überspringen */ }
+    }
+    row.height = maxImgH;
   }
 
   const buf = await wb.xlsx.writeBuffer();
@@ -498,33 +647,62 @@ document.getElementById('backupSaveBtn').addEventListener('click', () => {
   showToast('Backup gespeichert (inkl. Fotos).');
 });
 
-/* ---------- Export: E-Mail ---------- */
-document.getElementById('exportEmailBtn').addEventListener('click', async () => {
+/* ---------- Export: E-Mail (mit Anbieter-Auswahl) ---------- */
+document.getElementById('exportEmailBtn').addEventListener('click', () => {
   if (cache.length === 0) return showToast('Keine Einträge vorhanden.');
+  document.getElementById('emailChooser').classList.remove('hidden');
+});
+document.getElementById('emailChooserCancel').addEventListener('click', () => {
+  document.getElementById('emailChooser').classList.add('hidden');
+});
+document.getElementById('emailChooser').addEventListener('click', (e) => {
+  if (e.target.id === 'emailChooser') document.getElementById('emailChooser').classList.add('hidden');
+});
+document.querySelectorAll('.modal-option').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    document.getElementById('emailChooser').classList.add('hidden');
+    await sendEmail(btn.dataset.mode);
+  });
+});
+
+async function sendEmail(mode) {
   const doc = buildPdf();
   const fileName = pdfFileName();
-  const blob = doc.output('blob');
-  const file = new File([blob], fileName, { type: 'application/pdf' });
-
   const subject = Settings.firma ? `Mängelliste – ${Settings.firma}` : 'Mängelliste';
   const bodyLines = cache.map((e, i) => `${i + 1}. ${e.ort ? e.ort + ': ' : ''}${e.rohtext}`);
   const body = bodyLines.join('\n');
 
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: subject, text: body });
-      return;
-    } catch (err) {
-      if (err && err.name === 'AbortError') return;
-      // fall through to mailto fallback below
+  if (mode === 'share') {
+    const blob = doc.output('blob');
+    const file = new File([blob], fileName, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: subject, text: body });
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+      }
     }
+    showToast('Teilen ist auf diesem Gerät nicht verfügbar. Bitte eine andere Option wählen.', 4000);
+    return;
   }
 
-  showToast('Teilen per Foto/PDF nicht verfügbar – PDF wird heruntergeladen, E-Mail wird vorbereitet.', 4500);
+  // Gmail/Outlook/Standard-Mail-App können über einen Link keinen Anhang setzen -> PDF vorher herunterladen
   doc.save(fileName);
-  const mailto = `mailto:${encodeURIComponent(Settings.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body + '\n\n(Bitte die heruntergeladene PDF-Datei manuell anhängen.)')}`;
-  window.location.href = mailto;
-});
+  showToast('PDF heruntergeladen – bitte in der E-Mail manuell anhängen.', 4000);
+
+  const encSub = encodeURIComponent(subject);
+  const encBody = encodeURIComponent(body + '\n\n(Bitte die heruntergeladene PDF-Datei manuell anhängen.)');
+  const encTo = encodeURIComponent(Settings.email);
+
+  if (mode === 'gmail') {
+    window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${encTo}&su=${encSub}&body=${encBody}`, '_blank');
+  } else if (mode === 'outlook') {
+    window.open(`https://outlook.live.com/mail/0/deeplink/compose?to=${encTo}&subject=${encSub}&body=${encBody}`, '_blank');
+  } else {
+    window.location.href = `mailto:${encTo}?subject=${encSub}&body=${encBody}`;
+  }
+}
 
 /* ---------- Import: Excel ---------- */
 function parseGermanDate(str) {
@@ -565,20 +743,28 @@ async function importExcel(file) {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: 'array' });
   const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
+  // Unsere Excel-Exporte haben ein Titelbanner über den echten Spaltenköpfen -
+  // die Kopfzeile automatisch finden, damit auch ältere Exporte (ohne Banner) funktionieren.
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const headerRowIndex = rawRows.findIndex(r => r.some(cell => String(cell).trim() === 'Beschreibung'));
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', range: headerRowIndex >= 0 ? headerRowIndex : 0 });
+
+  const base = nextOrder();
   let imported = 0;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const rohtext = cellValue(row, 'Beschreibung', 'Freundliche Formulierung', 'Ursprüngliche Notiz');
     if (!rohtext) continue;
     const ort = cellValue(row, 'Ort / Bereich', 'Ort');
+    const gattung = cellValue(row, 'Arbeitsgattung', 'Gattung');
     const dateStr = cellValue(row, 'Datum');
-    const timestamp = parseGermanDate(dateStr) ?? (Date.now() + i);
+    const timestamp = parseGermanDate(dateStr) ?? (Date.now() + imported);
 
-    const entry = { id: uid(), timestamp, ort, rohtext, photo: null };
+    const entry = { id: uid(), timestamp, order: base + imported, ort, gattung, rohtext, photos: [] };
     await dbPut(entry);
     addHistory('ml_ortHistory', ort);
+    addHistory('ml_gattungHistory', gattung);
     addHistory('ml_rohtextHistory', rohtext);
     imported++;
   }
@@ -592,18 +778,23 @@ async function importBackup(file) {
   const data = JSON.parse(text);
   const entries = Array.isArray(data) ? data : (data.entries || []);
 
+  const base = nextOrder();
   let imported = 0;
   for (const e of entries) {
     if (!e || !e.rohtext) continue;
+    const photos = Array.isArray(e.photos) ? e.photos.filter(Boolean).slice(0, 2) : (e.photo ? [e.photo] : []);
     const entry = {
       id: uid(),
       timestamp: e.timestamp || Date.now(),
+      order: base + imported,
       ort: e.ort || '',
+      gattung: e.gattung || '',
       rohtext: e.rohtext,
-      photo: e.photo || null,
+      photos,
     };
     await dbPut(entry);
     addHistory('ml_ortHistory', entry.ort);
+    addHistory('ml_gattungHistory', entry.gattung);
     addHistory('ml_rohtextHistory', entry.rohtext);
     imported++;
   }

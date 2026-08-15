@@ -49,19 +49,35 @@
   </div>
 
   <div class="sheet-body">
-    <label class="field-label">Foto</label>
-    <div id="photoPreviewWrap" class="photo-preview" tabindex="0">
-      <img id="photoPreview" alt="Foto Vorschau" class="hidden">
-      <div id="photoPlaceholder" class="photo-placeholder">
-        <span class="photo-icon">📷</span>
-        <span>Foto aufnehmen</span>
+    <label class="field-label">Fotos (optional, bis zu 2)</label>
+    <div class="photo-slots">
+      <div id="photoPreviewWrap1" class="photo-preview photo-preview-small" tabindex="0">
+        <img id="photoPreview1" alt="Foto 1 Vorschau" class="hidden">
+        <div id="photoPlaceholder1" class="photo-placeholder">
+          <span class="photo-icon">📷</span>
+          <span>Foto 1</span>
+        </div>
+        <button type="button" id="photoRemove1" class="photo-remove hidden" aria-label="Foto 1 entfernen">✕</button>
+      </div>
+      <div id="photoPreviewWrap2" class="photo-preview photo-preview-small" tabindex="0">
+        <img id="photoPreview2" alt="Foto 2 Vorschau" class="hidden">
+        <div id="photoPlaceholder2" class="photo-placeholder">
+          <span class="photo-icon">📷</span>
+          <span>Foto 2</span>
+        </div>
+        <button type="button" id="photoRemove2" class="photo-remove hidden" aria-label="Foto 2 entfernen">✕</button>
       </div>
     </div>
-    <input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
+    <input type="file" id="photoInput1" accept="image/*" capture="environment" hidden>
+    <input type="file" id="photoInput2" accept="image/*" capture="environment" hidden>
 
     <label class="field-label" for="ortInput">Ort / Bereich (optional)</label>
     <input type="text" id="ortInput" list="ortHistoryList" placeholder="z. B. Küche, Bad, Fassade Nord" class="text-input">
     <datalist id="ortHistoryList"></datalist>
+
+    <label class="field-label" for="gattungInput">Arbeitsgattung (optional)</label>
+    <input type="text" id="gattungInput" list="gattungHistoryList" placeholder="z. B. Elektro, Sanitär, Maler" class="text-input">
+    <datalist id="gattungHistoryList"></datalist>
 
     <label class="field-label" for="rohtextInput">Was ist das Problem?</label>
     <input type="text" id="rohtextInput" list="rohtextHistoryList" placeholder="z. B. Steckdose neben dem Fenster funktioniert nicht" class="text-input">
@@ -107,6 +123,17 @@
     <p class="hint-block">Gilt für PDF- und Excel-Export. Kleinere Fotos = weniger Seiten.</p>
   </div>
 </section>
+
+<div id="emailChooser" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Per E-Mail senden</h3>
+    <button type="button" class="modal-option" data-mode="share">📤 Teilen (mit PDF-Anhang)</button>
+    <button type="button" class="modal-option" data-mode="gmail">📧 Gmail</button>
+    <button type="button" class="modal-option" data-mode="outlook">📧 Outlook</button>
+    <button type="button" class="modal-option" data-mode="mailto">✉️ Andere Mail-App</button>
+    <button type="button" id="emailChooserCancel" class="modal-cancel">Abbrechen</button>
+  </div>
+</div>
 
 <div id="toast" class="toast hidden"></div>
 

@@ -35,6 +35,7 @@ html, body {
   color: white;
 }
 .app-header h1 { font-size: 1.15rem; margin: 0; }
+.header-actions { display: flex; gap: 8px; }
 .icon-btn {
   background: rgba(255,255,255,0.15);
   border: none;
@@ -211,23 +212,7 @@ main.view {
 .photo-placeholder { display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--muted); }
 .photo-icon { font-size: 2rem; }
 
-.secondary-btn {
-  width: 100%;
-  margin-top: 16px;
-  padding: 13px;
-  border-radius: 10px;
-  border: none;
-  background: #eef2ff;
-  color: var(--primary-dark);
-  font-weight: 700;
-  font-size: 0.95rem;
-  cursor: pointer;
-}
-.secondary-btn:disabled { opacity: 0.5; cursor: default; }
-.secondary-btn.loading { opacity: 0.7; }
-
 .hint-block { font-size: 0.8rem; color: var(--muted); line-height: 1.5; margin: 6px 0 0; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .error-text { color: var(--red); font-size: 0.85rem; margin-top: 12px; }
 

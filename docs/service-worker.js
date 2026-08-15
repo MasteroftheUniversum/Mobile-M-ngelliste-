@@ -1,4 +1,4 @@
-const CACHE_NAME = 'maengelliste-v1';
+const CACHE_NAME = 'maengelliste-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -29,8 +29,6 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  // Never cache calls to the Anthropic API - always go to network.
-  if (url.hostname.includes('anthropic.com')) return;
 
   event.respondWith(
     caches.match(event.request).then((cached) => {

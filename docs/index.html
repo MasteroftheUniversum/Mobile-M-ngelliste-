@@ -14,8 +14,12 @@
 
 <header class="app-header">
   <h1>📋 Mängelliste</h1>
-  <button id="settingsBtn" class="icon-btn" title="Einstellungen" aria-label="Einstellungen">⚙️</button>
+  <div class="header-actions">
+    <button id="importBtn" class="icon-btn" title="Excel laden" aria-label="Excel laden">📥</button>
+    <button id="settingsBtn" class="icon-btn" title="Einstellungen" aria-label="Einstellungen">⚙️</button>
+  </div>
 </header>
+<input type="file" id="importInput" accept=".xlsx,.xls" hidden>
 
 <main id="listView" class="view">
   <div id="emptyState" class="empty-state">
@@ -53,17 +57,12 @@
     <input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
 
     <label class="field-label" for="ortInput">Ort / Bereich (optional)</label>
-    <input type="text" id="ortInput" placeholder="z. B. Küche, Bad, Fassade Nord" class="text-input">
+    <input type="text" id="ortInput" list="ortHistoryList" placeholder="z. B. Küche, Bad, Fassade Nord" class="text-input">
+    <datalist id="ortHistoryList"></datalist>
 
     <label class="field-label" for="rohtextInput">Was ist das Problem?</label>
-    <textarea id="rohtextInput" rows="3" placeholder="z. B. Steckdose neben dem Fenster funktioniert nicht"></textarea>
-
-    <button id="rephraseBtn" class="secondary-btn" disabled>✨ Freundlich formulieren</button>
-
-    <div id="friendlyWrap" class="hidden">
-      <label class="field-label" for="friendlyInput">Freundliche Formulierung <span class="hint">(kann angepasst werden)</span></label>
-      <textarea id="friendlyInput" rows="3"></textarea>
-    </div>
+    <input type="text" id="rohtextInput" list="rohtextHistoryList" placeholder="z. B. Steckdose neben dem Fenster funktioniert nicht" class="text-input">
+    <datalist id="rohtextHistoryList"></datalist>
 
     <p id="editorError" class="error-text hidden"></p>
   </div>
@@ -77,14 +76,6 @@
     <button id="settingsSave" class="text-btn text-btn-primary">Fertig</button>
   </div>
   <div class="sheet-body">
-    <label class="field-label" for="apiKeyInput">Anthropic API-Key</label>
-    <input type="password" id="apiKeyInput" placeholder="sk-ant-..." class="text-input" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <p class="hint-block">
-      Der Schlüssel wird <strong>nur auf diesem Gerät</strong> gespeichert (lokal im Browser) und für nichts anderes verwendet
-      als die Umformulierung deiner Mangeltexte. Du bekommst ihn unter
-      <span class="mono">console.anthropic.com</span> → API Keys.
-    </p>
-
     <label class="field-label" for="emailInput">E-Mail-Adresse für Export (optional)</label>
     <input type="email" id="emailInput" placeholder="empfaenger@beispiel.de" class="text-input" autocomplete="off">
     <p class="hint-block">Wird beim E-Mail-Export als Empfänger vorausgefüllt.</p>

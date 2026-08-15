@@ -9,13 +9,31 @@ if ('serviceWorker' in navigator) {
 
 /* ---------- Settings (localStorage) ---------- */
 const Settings = {
-  get apiKey() { return localStorage.getItem('ml_apiKey') || ''; },
-  set apiKey(v) { localStorage.setItem('ml_apiKey', v || ''); },
   get email() { return localStorage.getItem('ml_email') || ''; },
   set email(v) { localStorage.setItem('ml_email', v || ''); },
   get firma() { return localStorage.getItem('ml_firma') || ''; },
   set firma(v) { localStorage.setItem('ml_firma', v || ''); },
 };
+
+/* ---------- History (Dropdown-Vorschläge für Ort/Bereich und Beschreibung) ---------- */
+const HISTORY_LIMIT = 60;
+function getHistory(key) {
+  try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; }
+}
+function addHistory(key, value) {
+  if (!value) return;
+  const list = getHistory(key).filter(v => v !== value);
+  list.unshift(value);
+  localStorage.setItem(key, JSON.stringify(list.slice(0, HISTORY_LIMIT)));
+}
+function renderDatalist(datalistId, key) {
+  const dl = document.getElementById(datalistId);
+  dl.innerHTML = getHistory(key).map(v => `<option value="${escapeHtml(v)}"></option>`).join('');
+}
+function refreshHistoryDatalists() {
+  renderDatalist('ortHistoryList', 'ml_ortHistory');
+  renderDatalist('rohtextHistoryList', 'ml_rohtextHistory');
+}
 
 /* ---------- IndexedDB ---------- */
 const DB_NAME = 'maengelliste';
@@ -145,7 +163,7 @@ async function refreshList() {
       ${entry.photo ? `<img src="${entry.photo}" alt="">` : ''}
       <div class="entry-body">
         ${entry.ort ? `<div class="entry-ort">${escapeHtml(entry.ort)}</div>` : ''}
-        <p class="entry-text">${escapeHtml(entry.friendly || entry.rohtext)}</p>
+        <p class="entry-text">${escapeHtml(entry.rohtext)}</p>
         <div class="entry-meta">${formatDate(entry.timestamp)}</div>
       </div>
       <div class="entry-actions">
@@ -175,21 +193,18 @@ function resetEditor() {
   document.getElementById('photoPlaceholder').classList.remove('hidden');
   document.getElementById('ortInput').value = '';
   document.getElementById('rohtextInput').value = '';
-  document.getElementById('friendlyInput').value = '';
-  document.getElementById('friendlyWrap').classList.add('hidden');
   document.getElementById('editorError').classList.add('hidden');
   updateEditorState();
 }
 
 function updateEditorState() {
   const hasText = document.getElementById('rohtextInput').value.trim().length > 0;
-  document.getElementById('rephraseBtn').disabled = !hasText;
-  const hasFriendly = document.getElementById('friendlyInput').value.trim().length > 0;
-  document.getElementById('editorSave').disabled = !(hasText || hasFriendly);
+  document.getElementById('editorSave').disabled = !hasText;
 }
 
 document.getElementById('addBtn').addEventListener('click', () => {
   resetEditor();
+  refreshHistoryDatalists();
   showView('editor');
 });
 document.getElementById('editorCancel').addEventListener('click', () => showView('list'));
@@ -212,76 +227,20 @@ document.getElementById('photoInput').addEventListener('change', async (e) => {
 });
 
 document.getElementById('rohtextInput').addEventListener('input', updateEditorState);
-document.getElementById('friendlyInput').addEventListener('input', updateEditorState);
-
-document.getElementById('rephraseBtn').addEventListener('click', async () => {
-  const rohtext = document.getElementById('rohtextInput').value.trim();
-  const ort = document.getElementById('ortInput').value.trim();
-  const errEl = document.getElementById('editorError');
-  errEl.classList.add('hidden');
-
-  if (!Settings.apiKey) {
-    showView('settings');
-    showToast('Bitte zuerst deinen API-Key eintragen.');
-    return;
-  }
-
-  const btn = document.getElementById('rephraseBtn');
-  btn.disabled = true;
-  btn.classList.add('loading');
-  btn.textContent = '⏳ Formuliere...';
-
-  try {
-    const friendly = await rephraseText(rohtext, ort);
-    document.getElementById('friendlyInput').value = friendly;
-    document.getElementById('friendlyWrap').classList.remove('hidden');
-    updateEditorState();
-  } catch (err) {
-    errEl.textContent = 'Fehler bei der Umformulierung: ' + err.message;
-    errEl.classList.remove('hidden');
-  } finally {
-    btn.disabled = false;
-    btn.classList.remove('loading');
-    btn.textContent = '✨ Freundlich formulieren';
-  }
-});
-
-async function rephraseText(rohtext, ort) {
-  const locationHint = ort ? ` (Bereich: ${ort})` : '';
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': Settings.apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 200,
-      system: 'Du hilfst dabei, kurze Mangel-Notizen von einer Begehung (z.B. Bau, Wohnung, Miete) in eine einzige freundliche, höfliche Frage an die zuständige Person umzuformulieren, die um Prüfung/Behebung bittet. Antworte AUSSCHLIESSLICH mit der umformulierten Frage auf Deutsch, ohne Anführungszeichen, ohne Erklärung, ohne Anrede.',
-      messages: [{ role: 'user', content: `Mangel-Notiz${locationHint}: ${rohtext}` }],
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    if (res.status === 401) throw new Error('API-Key ungültig. Bitte in den Einstellungen prüfen.');
-    throw new Error(`API-Fehler ${res.status}. ${body.slice(0, 120)}`);
-  }
-  const data = await res.json();
-  return (data.content || []).map(b => b.text || '').join('').trim();
-}
 
 document.getElementById('editorSave').addEventListener('click', async () => {
+  const ort = document.getElementById('ortInput').value.trim();
+  const rohtext = document.getElementById('rohtextInput').value.trim();
   const entry = {
     id: uid(),
     timestamp: Date.now(),
-    ort: document.getElementById('ortInput').value.trim(),
-    rohtext: document.getElementById('rohtextInput').value.trim(),
-    friendly: document.getElementById('friendlyInput').value.trim(),
+    ort,
+    rohtext,
     photo: currentPhotoDataUrl,
   };
   await dbPut(entry);
+  addHistory('ml_ortHistory', ort);
+  addHistory('ml_rohtextHistory', rohtext);
   showView('list');
   refreshList();
   showToast('Mangel gespeichert.');
@@ -289,14 +248,12 @@ document.getElementById('editorSave').addEventListener('click', async () => {
 
 /* ---------- Settings ---------- */
 document.getElementById('settingsBtn').addEventListener('click', () => {
-  document.getElementById('apiKeyInput').value = Settings.apiKey;
   document.getElementById('emailInput').value = Settings.email;
   document.getElementById('firmaInput').value = Settings.firma;
   showView('settings');
 });
 document.getElementById('settingsCancel').addEventListener('click', () => showView(lastMainView));
 document.getElementById('settingsSave').addEventListener('click', () => {
-  Settings.apiKey = document.getElementById('apiKeyInput').value.trim();
   Settings.email = document.getElementById('emailInput').value.trim();
   Settings.firma = document.getElementById('firmaInput').value.trim();
   showView(lastMainView);
@@ -347,18 +304,18 @@ function buildPdf() {
         const textX = margin + w + 14;
         const textW = pageW - margin - textX;
         doc.setFontSize(11);
-        const lines = doc.splitTextToSize(entry.friendly || entry.rohtext, textW);
+        const lines = doc.splitTextToSize(entry.rohtext, textW);
         doc.text(lines, textX, y + 12);
         y += Math.max(h, lines.length * 13) + 20;
       } catch (e) {
         doc.setFontSize(11);
-        const lines = doc.splitTextToSize(entry.friendly || entry.rohtext, pageW - 2 * margin);
+        const lines = doc.splitTextToSize(entry.rohtext, pageW - 2 * margin);
         doc.text(lines, margin, y + 12);
         y += lines.length * 13 + 20;
       }
     } else {
       doc.setFontSize(11);
-      const lines = doc.splitTextToSize(entry.friendly || entry.rohtext, pageW - 2 * margin);
+      const lines = doc.splitTextToSize(entry.rohtext, pageW - 2 * margin);
       doc.text(lines, margin, y + 12);
       y += lines.length * 13 + 20;
     }
@@ -389,12 +346,11 @@ document.getElementById('exportXlsxBtn').addEventListener('click', () => {
     'Nr.': i + 1,
     'Datum': formatDate(e.timestamp),
     'Ort / Bereich': e.ort || '',
-    'Freundliche Formulierung': e.friendly || e.rohtext,
-    'Ursprüngliche Notiz': e.rohtext,
+    'Beschreibung': e.rohtext,
     'Foto vorhanden': e.photo ? 'Ja' : 'Nein',
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{ wch: 5 }, { wch: 12 }, { wch: 18 }, { wch: 50 }, { wch: 40 }, { wch: 12 }];
+  ws['!cols'] = [{ wch: 5 }, { wch: 12 }, { wch: 18 }, { wch: 60 }, { wch: 12 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Mängelliste');
   const stamp = new Date().toISOString().slice(0, 10);
@@ -412,7 +368,7 @@ document.getElementById('exportEmailBtn').addEventListener('click', async () => 
   const file = new File([blob], fileName, { type: 'application/pdf' });
 
   const subject = Settings.firma ? `Mängelliste – ${Settings.firma}` : 'Mängelliste';
-  const bodyLines = cache.map((e, i) => `${i + 1}. ${e.ort ? e.ort + ': ' : ''}${e.friendly || e.rohtext}`);
+  const bodyLines = cache.map((e, i) => `${i + 1}. ${e.ort ? e.ort + ': ' : ''}${e.rohtext}`);
   const body = bodyLines.join('\n');
 
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -429,6 +385,63 @@ document.getElementById('exportEmailBtn').addEventListener('click', async () => 
   doc.save(fileName);
   const mailto = `mailto:${encodeURIComponent(Settings.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body + '\n\n(Bitte die heruntergeladene PDF-Datei manuell anhängen.)')}`;
   window.location.href = mailto;
+});
+
+/* ---------- Import: Excel ---------- */
+function parseGermanDate(str) {
+  const m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec((str || '').trim());
+  if (!m) return null;
+  const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+
+function cellValue(row, ...keys) {
+  for (const k of keys) {
+    if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') return String(row[k]).trim();
+  }
+  return '';
+}
+
+document.getElementById('importBtn').addEventListener('click', () => {
+  document.getElementById('importInput').click();
+});
+
+document.getElementById('importInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+    let imported = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rohtext = cellValue(row, 'Beschreibung', 'Freundliche Formulierung', 'Ursprüngliche Notiz');
+      if (!rohtext) continue;
+      const ort = cellValue(row, 'Ort / Bereich', 'Ort');
+      const dateStr = cellValue(row, 'Datum');
+      const timestamp = parseGermanDate(dateStr) ?? (Date.now() + i);
+
+      const entry = { id: uid(), timestamp, ort, rohtext, photo: null };
+      await dbPut(entry);
+      addHistory('ml_ortHistory', ort);
+      addHistory('ml_rohtextHistory', rohtext);
+      imported++;
+    }
+
+    refreshList();
+    if (imported > 0) {
+      showToast(`${imported} Eintrag/Einträge importiert (ohne Fotos).`, 3500);
+    } else {
+      showToast('Keine passenden Zeilen in der Datei gefunden.');
+    }
+  } catch (err) {
+    showToast('Import fehlgeschlagen: ' + err.message, 4000);
+  }
 });
 
 /* ---------- Init ---------- */

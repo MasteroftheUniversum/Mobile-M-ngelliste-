@@ -15,11 +15,11 @@
 <header class="app-header">
   <h1>📋 Mängelliste</h1>
   <div class="header-actions">
-    <button id="importBtn" class="icon-btn" title="Excel laden" aria-label="Excel laden">📥</button>
+    <button id="importBtn" class="icon-btn" title="Excel oder Backup laden" aria-label="Excel oder Backup laden">📥</button>
     <button id="settingsBtn" class="icon-btn" title="Einstellungen" aria-label="Einstellungen">⚙️</button>
   </div>
 </header>
-<input type="file" id="importInput" accept=".xlsx,.xls" hidden>
+<input type="file" id="importInput" accept=".xlsx,.xls,.json" hidden>
 
 <main id="listView" class="view">
   <div id="emptyState" class="empty-state">
@@ -30,9 +30,12 @@
 </main>
 
 <div id="exportBar" class="export-bar hidden">
-  <button id="exportPdfBtn" class="pill-btn">📄 PDF</button>
-  <button id="exportXlsxBtn" class="pill-btn">📊 Excel</button>
-  <button id="exportEmailBtn" class="pill-btn pill-primary">✉️ E-Mail senden</button>
+  <div class="export-grid">
+    <button id="exportPdfBtn" class="pill-btn">📄 PDF</button>
+    <button id="exportXlsxBtn" class="pill-btn">📊 Excel</button>
+    <button id="backupSaveBtn" class="pill-btn">💾 Sichern</button>
+    <button id="exportEmailBtn" class="pill-btn pill-primary">✉️ E-Mail senden</button>
+  </div>
 </div>
 
 <button id="addBtn" class="fab" aria-label="Neuen Mangel erfassen">+</button>
@@ -41,7 +44,7 @@
 <section id="editorView" class="view sheet hidden">
   <div class="sheet-header">
     <button id="editorCancel" class="text-btn">Abbrechen</button>
-    <h2>Neuer Mangel</h2>
+    <h2 id="editorTitle">Neuer Mangel</h2>
     <button id="editorSave" class="text-btn text-btn-primary" disabled>Speichern</button>
   </div>
 

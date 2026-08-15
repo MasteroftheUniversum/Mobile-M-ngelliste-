@@ -130,11 +130,7 @@ const views = {
   editor: document.getElementById('editorView'),
   settings: document.getElementById('settingsView'),
 };
-let lastMainView = 'list';
 function showView(name) {
-  if (!views.editor.classList.contains('hidden')) lastMainView = 'editor';
-  else if (!views.list.classList.contains('hidden')) lastMainView = 'list';
-
   Object.values(views).forEach(v => v.classList.add('hidden'));
   views[name].classList.remove('hidden');
   document.getElementById('addBtn').classList.toggle('hidden', name !== 'list');
@@ -149,6 +145,7 @@ async function refreshList() {
   const empty = document.getElementById('emptyState');
   const exportBar = document.getElementById('exportBar');
   list.innerHTML = '';
+  document.getElementById('addBtn').classList.toggle('raised', cache.length > 0);
   if (cache.length === 0) {
     empty.classList.remove('hidden');
     exportBar.classList.add('hidden');
@@ -167,8 +164,10 @@ async function refreshList() {
         <div class="entry-meta">${formatDate(entry.timestamp)}</div>
       </div>
       <div class="entry-actions">
+        <button data-action="edit" title="Bearbeiten">✏️</button>
         <button data-action="delete" title="Löschen">🗑️</button>
       </div>`;
+    li.querySelector('[data-action="edit"]').addEventListener('click', () => openEditor(entry));
     li.querySelector('[data-action="delete"]').addEventListener('click', async () => {
       if (confirm('Diesen Mangel wirklich löschen?')) {
         await dbDelete(entry.id);
@@ -185,6 +184,7 @@ function escapeHtml(s) {
 
 /* ---------- Editor ---------- */
 let currentPhotoDataUrl = null;
+let editingId = null;
 
 function resetEditor() {
   currentPhotoDataUrl = null;
@@ -197,16 +197,35 @@ function resetEditor() {
   updateEditorState();
 }
 
+function fillEditor(entry) {
+  document.getElementById('ortInput').value = entry.ort || '';
+  document.getElementById('rohtextInput').value = entry.rohtext || '';
+  currentPhotoDataUrl = entry.photo || null;
+  const img = document.getElementById('photoPreview');
+  const placeholder = document.getElementById('photoPlaceholder');
+  if (currentPhotoDataUrl) {
+    img.src = currentPhotoDataUrl;
+    img.classList.remove('hidden');
+    placeholder.classList.add('hidden');
+  }
+}
+
+function openEditor(entry) {
+  editingId = entry ? entry.id : null;
+  resetEditor();
+  if (entry) fillEditor(entry);
+  document.getElementById('editorTitle').textContent = entry ? 'Mangel bearbeiten' : 'Neuer Mangel';
+  refreshHistoryDatalists();
+  updateEditorState();
+  showView('editor');
+}
+
 function updateEditorState() {
   const hasText = document.getElementById('rohtextInput').value.trim().length > 0;
   document.getElementById('editorSave').disabled = !hasText;
 }
 
-document.getElementById('addBtn').addEventListener('click', () => {
-  resetEditor();
-  refreshHistoryDatalists();
-  showView('editor');
-});
+document.getElementById('addBtn').addEventListener('click', () => openEditor(null));
 document.getElementById('editorCancel').addEventListener('click', () => showView('list'));
 
 document.getElementById('photoPreviewWrap').addEventListener('click', () => {
@@ -231,9 +250,10 @@ document.getElementById('rohtextInput').addEventListener('input', updateEditorSt
 document.getElementById('editorSave').addEventListener('click', async () => {
   const ort = document.getElementById('ortInput').value.trim();
   const rohtext = document.getElementById('rohtextInput').value.trim();
+  const existing = editingId ? cache.find(e => e.id === editingId) : null;
   const entry = {
-    id: uid(),
-    timestamp: Date.now(),
+    id: editingId || uid(),
+    timestamp: existing ? existing.timestamp : Date.now(),
     ort,
     rohtext,
     photo: currentPhotoDataUrl,
@@ -241,9 +261,11 @@ document.getElementById('editorSave').addEventListener('click', async () => {
   await dbPut(entry);
   addHistory('ml_ortHistory', ort);
   addHistory('ml_rohtextHistory', rohtext);
+  const wasEditing = !!editingId;
+  editingId = null;
   showView('list');
   refreshList();
-  showToast('Mangel gespeichert.');
+  showToast(wasEditing ? 'Mangel aktualisiert.' : 'Mangel gespeichert.');
 });
 
 /* ---------- Settings ---------- */
@@ -252,11 +274,11 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('firmaInput').value = Settings.firma;
   showView('settings');
 });
-document.getElementById('settingsCancel').addEventListener('click', () => showView(lastMainView));
+document.getElementById('settingsCancel').addEventListener('click', () => showView('list'));
 document.getElementById('settingsSave').addEventListener('click', () => {
   Settings.email = document.getElementById('emailInput').value.trim();
   Settings.firma = document.getElementById('firmaInput').value.trim();
-  showView(lastMainView);
+  showView('list');
   showToast('Einstellungen gespeichert.');
 });
 
@@ -359,6 +381,33 @@ document.getElementById('exportXlsxBtn').addEventListener('click', () => {
   showToast('Hinweis: Fotos sind nur im PDF-Export enthalten.', 4000);
 });
 
+/* ---------- Backup: Sichern (JSON inkl. Fotos) ---------- */
+function backupFileName() {
+  const stamp = new Date().toISOString().slice(0, 10);
+  const base = (Settings.firma || 'Maengelliste').replace(/[^a-z0-9äöüß_\- ]/gi, '').trim() || 'Maengelliste';
+  return `${base}_Backup_${stamp}.json`;
+}
+
+document.getElementById('backupSaveBtn').addEventListener('click', () => {
+  if (cache.length === 0) return showToast('Keine Einträge vorhanden.');
+  const payload = {
+    type: 'maengelliste-backup',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    entries: cache,
+  };
+  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = backupFileName();
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showToast('Backup gespeichert (inkl. Fotos).');
+});
+
 /* ---------- Export: E-Mail ---------- */
 document.getElementById('exportEmailBtn').addEventListener('click', async () => {
   if (cache.length === 0) return showToast('Keine Einträge vorhanden.');
@@ -412,37 +461,66 @@ document.getElementById('importInput').addEventListener('change', async (e) => {
   if (!file) return;
 
   try {
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: 'array' });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-
-    let imported = 0;
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const rohtext = cellValue(row, 'Beschreibung', 'Freundliche Formulierung', 'Ursprüngliche Notiz');
-      if (!rohtext) continue;
-      const ort = cellValue(row, 'Ort / Bereich', 'Ort');
-      const dateStr = cellValue(row, 'Datum');
-      const timestamp = parseGermanDate(dateStr) ?? (Date.now() + i);
-
-      const entry = { id: uid(), timestamp, ort, rohtext, photo: null };
-      await dbPut(entry);
-      addHistory('ml_ortHistory', ort);
-      addHistory('ml_rohtextHistory', rohtext);
-      imported++;
-    }
-
-    refreshList();
-    if (imported > 0) {
-      showToast(`${imported} Eintrag/Einträge importiert (ohne Fotos).`, 3500);
+    if (/\.json$/i.test(file.name)) {
+      await importBackup(file);
     } else {
-      showToast('Keine passenden Zeilen in der Datei gefunden.');
+      await importExcel(file);
     }
   } catch (err) {
     showToast('Import fehlgeschlagen: ' + err.message, 4000);
   }
 });
+
+async function importExcel(file) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+  let imported = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rohtext = cellValue(row, 'Beschreibung', 'Freundliche Formulierung', 'Ursprüngliche Notiz');
+    if (!rohtext) continue;
+    const ort = cellValue(row, 'Ort / Bereich', 'Ort');
+    const dateStr = cellValue(row, 'Datum');
+    const timestamp = parseGermanDate(dateStr) ?? (Date.now() + i);
+
+    const entry = { id: uid(), timestamp, ort, rohtext, photo: null };
+    await dbPut(entry);
+    addHistory('ml_ortHistory', ort);
+    addHistory('ml_rohtextHistory', rohtext);
+    imported++;
+  }
+
+  refreshList();
+  showToast(imported > 0 ? `${imported} Eintrag/Einträge importiert (ohne Fotos).` : 'Keine passenden Zeilen in der Datei gefunden.', 3500);
+}
+
+async function importBackup(file) {
+  const text = await file.text();
+  const data = JSON.parse(text);
+  const entries = Array.isArray(data) ? data : (data.entries || []);
+
+  let imported = 0;
+  for (const e of entries) {
+    if (!e || !e.rohtext) continue;
+    const entry = {
+      id: uid(),
+      timestamp: e.timestamp || Date.now(),
+      ort: e.ort || '',
+      rohtext: e.rohtext,
+      photo: e.photo || null,
+    };
+    await dbPut(entry);
+    addHistory('ml_ortHistory', entry.ort);
+    addHistory('ml_rohtextHistory', entry.rohtext);
+    imported++;
+  }
+
+  refreshList();
+  showToast(imported > 0 ? `${imported} Eintrag/Einträge aus Backup geladen (inkl. Fotos).` : 'Keine Einträge im Backup gefunden.', 3500);
+}
 
 /* ---------- Init ---------- */
 refreshList();

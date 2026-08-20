@@ -139,6 +139,7 @@ function normalizeEntry(e) {
     photos,
     gattung: e.gattung || '',
     order: typeof e.order === 'number' ? e.order : e.timestamp,
+    done: !!e.done,
   };
 }
 
@@ -439,15 +440,23 @@ async function refreshList() {
   const list = document.getElementById('entryList');
   const empty = document.getElementById('emptyState');
   const exportBar = document.getElementById('exportBar');
+  const progressSummary = document.getElementById('progressSummary');
   list.innerHTML = '';
   document.getElementById('addBtn').classList.toggle('raised', cache.length > 0);
   if (cache.length === 0) {
     empty.classList.remove('hidden');
     exportBar.classList.add('hidden');
+    progressSummary.classList.add('hidden');
     return;
   }
   empty.classList.add('hidden');
   exportBar.classList.remove('hidden');
+
+  const doneCount = cache.filter(e => e.done).length;
+  progressSummary.classList.remove('hidden');
+  document.getElementById('progressSummaryText').innerHTML =
+    `<strong>${doneCount}</strong> von ${cache.length} erledigt`;
+  document.getElementById('progressFill').style.width = `${Math.round((doneCount / cache.length) * 100)}%`;
 
   const manual = sortMode === 'manual';
   const displayEntries = manual ? cache : sortedForDisplay(cache, sortMode);
@@ -466,10 +475,11 @@ async function refreshList() {
     }
 
     const li = document.createElement('li');
-    li.className = 'entry-card';
+    li.className = 'entry-card' + (entry.done ? ' done' : '');
     li.dataset.id = entry.id;
     const photosHtml = entry.photos.map(p => `<img src="${p}" alt="">`).join('');
     li.innerHTML = `
+      <button class="done-toggle" data-action="toggle-done" title="${entry.done ? 'Als offen markieren' : 'Als erledigt markieren'}" aria-label="Erledigt umschalten">✓</button>
       ${manual ? `<span class="drag-handle" title="Ziehen zum Verschieben" aria-label="Ziehen zum Verschieben">≡</span>` : ''}
       ${photosHtml ? `<div class="entry-photos">${photosHtml}</div>` : ''}
       <div class="entry-body">
@@ -478,12 +488,17 @@ async function refreshList() {
           ${entry.gattung ? `<span class="entry-gattung">${escapeHtml(entry.gattung)}</span>` : ''}
         </div>
         <p class="entry-text">${escapeHtml(entry.rohtext)}</p>
-        <div class="entry-meta">${formatDate(entry.timestamp)}</div>
+        <div class="entry-meta">${formatDate(entry.timestamp)}${entry.done ? ' · Erledigt' : ''}</div>
       </div>
       <div class="entry-actions">
         <button data-action="edit" title="Bearbeiten">✏️</button>
         <button data-action="delete" title="Löschen">🗑️</button>
       </div>`;
+    li.querySelector('[data-action="toggle-done"]').addEventListener('click', async () => {
+      entry.done = !entry.done;
+      await dbPut(entry);
+      refreshList();
+    });
     li.querySelector('[data-action="edit"]').addEventListener('click', () => openEditor(entry));
     li.querySelector('[data-action="delete"]').addEventListener('click', async () => {
       if (confirm('Diesen Mangel wirklich löschen?')) {
@@ -708,6 +723,7 @@ document.getElementById('editorSave').addEventListener('click', async () => {
     listId: existing ? (existing.listId || activeListId) : activeListId,
     timestamp: existing ? existing.timestamp : Date.now(),
     order: existing ? existing.order : nextOrder(),
+    done: existing ? existing.done : false,
     ort,
     gattung,
     rohtext,
@@ -748,24 +764,116 @@ function buildPdf() {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 40;
-  let y = margin;
-
+  const contentW = pageW - 2 * margin;
+  const photoGap = 8;
   const photoWidth = PHOTO_SIZES[Settings.photoSize].pdfWidth;
 
+  // Gleiche Sortierung/Gruppierung wie in der App (Reihenfolge, nach
+  // Ort/Bereich oder alphabetisch) statt immer der Rohreihenfolge.
+  const displayEntries = sortMode === 'manual' ? cache : sortedForDisplay(cache, sortMode);
+  const doneCount = cache.filter(e => e.done).length;
+  const sortLabel = { manual: 'Reihenfolge', ort: 'nach Ort/Bereich gruppiert', text: 'alphabetisch (A–Z)' }[sortMode] || '';
+
+  const NAVY = [30, 41, 59];
+  const BLUE = [37, 99, 235];
+  const GREEN = [22, 163, 74];
+  const MUTED = [100, 116, 139];
+  const BORDER = [226, 232, 240];
+  const ROOM_BAND = [220, 231, 250];
+  const CARD_BG = [250, 251, 253];
+  const CARD_BG_DONE = [244, 247, 245];
+
   const title = activeList && activeList.title ? `Mängelliste – ${activeList.title}` : 'Mängelliste';
-  doc.setFontSize(18);
-  const titleLines = doc.splitTextToSize(title, pageW - 2 * margin);
-  doc.text(titleLines, margin, y);
-  y += titleLines.length * 21;
-  doc.setFontSize(10);
-  doc.setTextColor(120);
-  doc.text(`Erstellt am ${new Date().toLocaleDateString('de-DE')} · ${cache.length} Punkt(e)`, margin, y);
-  doc.setTextColor(20);
-  y += 26;
+  let y = margin;
+  let pageNum = 1;
+  let lastGroupKey;
+  let groupHeaderDrawnOnPage = false;
 
-  const photoGap = 8;
+  function drawFooter() {
+    doc.setFontSize(8);
+    doc.setTextColor(...MUTED);
+    doc.text(`Seite ${pageNum}`, pageW - margin, pageH - 20, { align: 'right' });
+    doc.text(title, margin, pageH - 20);
+    doc.setTextColor(20, 20, 20);
+  }
 
-  cache.forEach((entry, idx) => {
+  function newPage() {
+    drawFooter();
+    doc.addPage();
+    pageNum++;
+    y = margin;
+    groupHeaderDrawnOnPage = false;
+  }
+
+  function ensureSpace(neededH) {
+    if (y + neededH > pageH - margin - 24) newPage();
+  }
+
+  function drawTopBanner() {
+    doc.setFillColor(...NAVY);
+    doc.rect(0, 0, pageW, 46, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(16);
+    doc.text(doc.splitTextToSize(title, contentW), margin, 29);
+
+    doc.setFillColor(...BLUE);
+    doc.rect(0, 46, pageW, 22, 'F');
+    doc.setFont(undefined, 'italic');
+    doc.setFontSize(9);
+    doc.text(
+      `Erstellt am ${new Date().toLocaleDateString('de-DE')} · ${cache.length} Punkt(e) · ${doneCount} erledigt · Sortierung: ${sortLabel}`,
+      margin, 61
+    );
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(20, 20, 20);
+    y = 46 + 22 + 18;
+  }
+
+  function drawCheckbox(x, top, done) {
+    const size = 11;
+    doc.setLineWidth(1);
+    if (done) {
+      doc.setFillColor(...GREEN);
+      doc.setDrawColor(...GREEN);
+      doc.roundedRect(x, top, size, size, 2, 2, 'FD');
+      doc.setDrawColor(255, 255, 255);
+      doc.setLineWidth(1.3);
+      doc.line(x + 2.3, top + 5.8, x + 4.6, top + 8.2);
+      doc.line(x + 4.6, top + 8.2, x + 8.8, top + 3);
+    } else {
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(...BORDER);
+      doc.roundedRect(x, top, size, size, 2, 2, 'FD');
+    }
+    doc.setLineWidth(0.5);
+    doc.setDrawColor(...BORDER);
+  }
+
+  function drawGroupHeader(key, continued) {
+    ensureSpace(30);
+    doc.setFillColor(...ROOM_BAND);
+    doc.rect(margin, y, contentW, 22, 'F');
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(...NAVY);
+    doc.text(key + (continued ? ' (Fortsetzung)' : ''), margin + 10, y + 15);
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(20, 20, 20);
+    y += 22 + 10;
+    groupHeaderDrawnOnPage = true;
+    lastGroupKey = key;
+  }
+
+  drawTopBanner();
+
+  displayEntries.forEach((entry, idx) => {
+    if (sortMode === 'ort') {
+      const groupKey = entry.ort || 'Ohne Ortsangabe';
+      if (groupKey !== lastGroupKey) drawGroupHeader(groupKey, false);
+      else if (!groupHeaderDrawnOnPage) drawGroupHeader(groupKey, true);
+    }
+
     const photoBlocks = [];
     (entry.photos || []).forEach(p => {
       try {
@@ -775,39 +883,64 @@ function buildPdf() {
     });
     const colH = photoBlocks.reduce((sum, b) => sum + b.h, 0) + (photoBlocks.length > 1 ? photoGap : 0);
 
-    const estBlockH = 30 + colH + 60;
-    if (y + estBlockH > pageH - margin) { doc.addPage(); y = margin; }
-
-    doc.setFontSize(12);
-    doc.setFont(undefined, 'bold');
-    const headerParts = [entry.ort || 'Ohne Ortsangabe'];
-    if (entry.gattung) headerParts.push(entry.gattung);
-    doc.text(`${idx + 1}. ${headerParts.join(' · ')}`, margin, y);
-    doc.setFont(undefined, 'normal');
-    doc.setFontSize(9);
-    doc.setTextColor(130);
-    doc.text(formatDate(entry.timestamp), pageW - margin, y, { align: 'right' });
-    doc.setTextColor(20);
-    y += 14;
-
-    const textX = photoBlocks.length ? margin + photoWidth + 14 : margin;
-    const textW = pageW - margin - textX;
+    const padLeft = 16;
+    const checkboxW = 17;
+    const textX = margin + padLeft + checkboxW + (photoBlocks.length ? photoWidth + 14 : 0);
+    const textW = pageW - margin - padLeft - textX;
     doc.setFontSize(11);
     const lines = doc.splitTextToSize(entry.rohtext, textW);
-    doc.text(lines, textX, y + 12);
 
-    let imgY = y;
+    const blockH = Math.max(colH, lines.length * 13, 20) + 34;
+    ensureSpace(blockH);
+
+    const top = y;
+    doc.setFillColor(...(entry.done ? CARD_BG_DONE : CARD_BG));
+    doc.roundedRect(margin, top, contentW, blockH, 6, 6, 'F');
+    doc.setFillColor(...(entry.done ? GREEN : BLUE));
+    doc.roundedRect(margin, top, 4, blockH, 2, 2, 'F');
+
+    drawCheckbox(margin + padLeft, top + 13, entry.done);
+
+    let cy = top + 22;
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11.5);
+    doc.setTextColor(...(entry.done ? MUTED : NAVY));
+    const headerParts = [entry.ort || 'Ohne Ortsangabe'];
+    if (entry.gattung) headerParts.push(entry.gattung);
+    doc.text(`${idx + 1}. ${headerParts.join(' · ')}`, margin + padLeft + checkboxW, cy);
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(...MUTED);
+    doc.text(
+      formatDate(entry.timestamp) + (entry.done ? ' · Erledigt' : ''),
+      pageW - margin - padLeft, cy, { align: 'right' }
+    );
+
+    const textTop = cy + 14;
+    doc.setFontSize(11);
+    doc.setTextColor(...(entry.done ? MUTED : [20, 20, 20]));
+    doc.text(lines, textX, textTop);
+    if (entry.done) {
+      doc.setDrawColor(...MUTED);
+      doc.setLineWidth(0.7);
+      lines.forEach((line, li) => {
+        const lw = doc.getTextWidth(line);
+        const ly = textTop + li * 13 - 3.5;
+        doc.line(textX, ly, textX + lw, ly);
+      });
+    }
+    doc.setTextColor(20, 20, 20);
+
+    let imgY = top + 22;
     photoBlocks.forEach(b => {
-      try { doc.addImage(b.photo, 'JPEG', margin, imgY, photoWidth, b.h); } catch (e) {}
+      try { doc.addImage(b.photo, 'JPEG', margin + padLeft + checkboxW, imgY, photoWidth, b.h); } catch (e) {}
       imgY += b.h + photoGap;
     });
 
-    y += Math.max(colH, lines.length * 13) + 20;
-
-    doc.setDrawColor(225);
-    doc.line(margin, y - 8, pageW - margin, y - 8);
+    y = top + blockH + 12;
   });
 
+  drawFooter();
   return doc;
 }
 
@@ -869,6 +1002,7 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
   const photoColW = Math.max(10, Math.round(imgW / 7));
   const columns = [
     { key: 'nr', width: 6 },
+    { key: 'status', width: 12 },
     { key: 'gattung', width: 16 },
     { key: 'ort', width: 18 },
     { key: 'beschreibung', width: 48 },
@@ -883,8 +1017,12 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
   const NAVY = 'FF1E293B';
   const BLUE = 'FF2563EB';
   const BLUE_LIGHT = 'FFEFF4FF';
+  const GREEN = 'FF16A34A';
+  const GREEN_LIGHT = 'FFDCFCE7';
+  const MUTED = 'FF64748B';
   const ROOM_BAND = 'FFDCE7FA';
   const STRIPE = 'FFF7F9FC';
+  const STRIPE_DONE = 'FFF1F5F1';
   const BORDER = 'FFE2E8F0';
   const thinBorder = { style: 'thin', color: { argb: BORDER } };
   const cellBorder = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
@@ -898,9 +1036,10 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
 
   const sortLabel = { manual: 'Reihenfolge', ort: 'nach Ort/Bereich gruppiert', text: 'alphabetisch (A–Z)' }[sortMode] || '';
+  const doneCount = cache.filter(en => en.done).length;
   ws.mergeCells(2, 1, 2, colCount);
   const subCell = ws.getCell(2, 1);
-  subCell.value = `Erstellt am ${new Date().toLocaleDateString('de-DE')} · ${cache.length} Punkt(e) · Sortierung: ${sortLabel}`;
+  subCell.value = `Erstellt am ${new Date().toLocaleDateString('de-DE')} · ${cache.length} Punkt(e) · ${doneCount} erledigt · Sortierung: ${sortLabel}`;
   subCell.font = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
   subCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
   ws.getRow(2).height = 20;
@@ -908,7 +1047,7 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
 
   const headerRowIdx = 3;
   const headerRow = ws.getRow(headerRowIdx);
-  headerRow.values = ['Nr.', 'Arbeitsgattung', 'Ort / Bereich', 'Beschreibung', 'Foto 1', 'Foto 2', 'Datum'];
+  headerRow.values = ['Nr.', 'Status', 'Arbeitsgattung', 'Ort / Bereich', 'Beschreibung', 'Foto 1', 'Foto 2', 'Datum'];
   headerRow.font = { bold: true, size: 11, color: { argb: 'FFFFFFFF' } };
   headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLUE } };
   headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
@@ -945,6 +1084,7 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
     const row = ws.getRow(rowIdx);
     row.values = {
       nr,
+      status: e.done ? '✔ Erledigt' : 'Offen',
       gattung: e.gattung || '',
       ort: e.ort || '',
       beschreibung: e.rohtext,
@@ -954,18 +1094,27 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
     };
     row.alignment = { vertical: 'middle', wrapText: true };
     row.getCell(colIndexOf('nr') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
+    row.getCell(colIndexOf('status') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
     row.getCell(colIndexOf('datum') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
     row.getCell(colIndexOf('foto1') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
     row.getCell(colIndexOf('foto2') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
     row.eachCell({ includeEmpty: true }, cell => { cell.border = cellBorder; });
     if (nr % 2 === 0) {
       row.eachCell({ includeEmpty: true }, cell => {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: STRIPE } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: e.done ? STRIPE_DONE : STRIPE } };
       });
     }
     if (e.gattung) {
       row.getCell(colIndexOf('gattung') + 1).font = { color: { argb: BLUE }, bold: true, size: 10 };
       row.getCell(colIndexOf('gattung') + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLUE_LIGHT } };
+    }
+    const statusCell = row.getCell(colIndexOf('status') + 1);
+    if (e.done) {
+      statusCell.font = { color: { argb: GREEN }, bold: true, size: 10 };
+      statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN_LIGHT } };
+      row.getCell(colIndexOf('beschreibung') + 1).font = { strike: true, color: { argb: MUTED } };
+    } else {
+      statusCell.font = { color: { argb: MUTED }, size: 10 };
     }
 
     let maxImgH = 20;
@@ -1059,7 +1208,9 @@ async function sendEmail(mode) {
   const doc = buildPdf();
   const fileName = pdfFileName();
   const subject = activeList && activeList.title ? `Mängelliste – ${activeList.title}` : 'Mängelliste';
-  const bodyLines = cache.map((e, i) => `${i + 1}. ${e.ort ? e.ort + ': ' : ''}${e.rohtext}`);
+  const bodyEntries = sortMode === 'manual' ? cache : sortedForDisplay(cache, sortMode);
+  const bodyLines = bodyEntries.map((e, i) =>
+    `${i + 1}. [${e.done ? 'x' : ' '}] ${e.ort ? e.ort + ': ' : ''}${e.rohtext}`);
   const body = bodyLines.join('\n');
 
   if (mode === 'share') {
@@ -1150,8 +1301,9 @@ async function importExcel(file) {
     const gattung = cellValue(row, 'Arbeitsgattung', 'Gattung');
     const dateStr = cellValue(row, 'Datum');
     const timestamp = parseGermanDate(dateStr) ?? (Date.now() + imported);
+    const done = /erledigt/i.test(cellValue(row, 'Status'));
 
-    const entry = { id: uid(), listId: activeListId, timestamp, order: base + imported, ort, gattung, rohtext, photos: [] };
+    const entry = { id: uid(), listId: activeListId, timestamp, order: base + imported, done, ort, gattung, rohtext, photos: [] };
     await dbPut(entry);
     addHistory('ml_ortHistory', ort);
     addHistory('ml_gattungHistory', gattung);
@@ -1178,6 +1330,7 @@ async function importBackup(file) {
       listId: activeListId,
       timestamp: e.timestamp || Date.now(),
       order: base + imported,
+      done: !!e.done,
       ort: e.ort || '',
       gattung: e.gattung || '',
       rohtext: e.rohtext,

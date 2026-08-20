@@ -154,6 +154,12 @@ main.view {
   font-size: 1.05rem;
 }
 
+.progress-summary { margin: 0 0 14px; }
+.progress-summary-text { font-size: 0.88rem; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+.progress-summary-text strong { color: var(--green); }
+.progress-track { height: 8px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.progress-fill { height: 100%; background: var(--green); border-radius: 999px; transition: width 0.25s ease; }
+
 .entry-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 
 .entry-card {
@@ -164,6 +170,38 @@ main.view {
   gap: 14px;
   box-shadow: 0 2px 8px rgba(15,23,42,0.08);
   align-items: flex-start;
+}
+.entry-card.done {
+  background: #f4f7f5;
+  box-shadow: 0 1px 4px rgba(15,23,42,0.05);
+}
+.entry-card.done .entry-photos { opacity: 0.55; }
+.entry-card.done .entry-text { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--muted); }
+.entry-card.done .entry-ort { color: var(--muted); }
+
+.done-toggle {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--card);
+  color: transparent;
+  font-size: 1rem;
+  font-weight: 900;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.done-toggle:active { background: var(--bg); }
+.entry-card.done .done-toggle {
+  background: var(--green);
+  border-color: var(--green);
+  color: white;
 }
 .drag-handle {
   flex-shrink: 0;

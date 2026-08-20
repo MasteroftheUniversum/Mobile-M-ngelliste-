@@ -309,6 +309,22 @@ main.view {
 }
 .field-label .hint { font-weight: 400; text-transform: none; }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 4px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.checkbox-row input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
 .text-input, textarea {
   width: 100%;
   border: 1px solid var(--border);

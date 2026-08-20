@@ -8,11 +8,16 @@ if ('serviceWorker' in navigator) {
 }
 
 /* ---------- Settings (localStorage) ---------- */
+const DEFAULT_XLSX_PASSWORD = 'maengel2026';
 const Settings = {
   get email() { return localStorage.getItem('ml_email') || ''; },
   set email(v) { localStorage.setItem('ml_email', v || ''); },
   get photoSize() { return localStorage.getItem('ml_photoSize') || 'mittel'; },
   set photoSize(v) { localStorage.setItem('ml_photoSize', v); },
+  get xlsxProtect() { return localStorage.getItem('ml_xlsxProtect') !== '0'; }, // Standard: an
+  set xlsxProtect(v) { localStorage.setItem('ml_xlsxProtect', v ? '1' : '0'); },
+  get xlsxPassword() { return localStorage.getItem('ml_xlsxPassword') || ''; },
+  set xlsxPassword(v) { localStorage.setItem('ml_xlsxPassword', v || ''); },
 };
 
 /* ---------- Fotogröße (PDF/Excel) ---------- */
@@ -722,12 +727,16 @@ document.getElementById('editorSave').addEventListener('click', async () => {
 /* ---------- Settings ---------- */
 document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('emailInput').value = Settings.email;
+  document.getElementById('xlsxProtectInput').checked = Settings.xlsxProtect;
+  document.getElementById('xlsxPasswordInput').value = Settings.xlsxPassword;
   renderPhotoSizeChooser();
   showView('settings');
 });
 document.getElementById('settingsCancel').addEventListener('click', () => showView('list'));
 document.getElementById('settingsSave').addEventListener('click', () => {
   Settings.email = document.getElementById('emailInput').value.trim();
+  Settings.xlsxProtect = document.getElementById('xlsxProtectInput').checked;
+  Settings.xlsxPassword = document.getElementById('xlsxPasswordInput').value.trim();
   showView('list');
   showToast('Einstellungen gespeichert.');
 });
@@ -846,10 +855,15 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
   if (cache.length === 0) return showToast('Keine Einträge vorhanden.');
   showToast('Excel wird erstellt …', 2000);
 
+  // Gleiche Sortierung/Gruppierung wie in der Listenansicht (Reihenfolge,
+  // nach Ort/Bereich oder alphabetisch) – nicht immer die Rohreihenfolge.
+  const displayEntries = sortMode === 'manual' ? cache : sortedForDisplay(cache, sortMode);
+
   const imgW = PHOTO_SIZES[Settings.photoSize].xlsxWidth;
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Mängelliste', {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    views: [{ showGridLines: false }],
   });
 
   const photoColW = Math.max(10, Math.round(imgW / 7));
@@ -857,49 +871,80 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
     { key: 'nr', width: 6 },
     { key: 'gattung', width: 16 },
     { key: 'ort', width: 18 },
-    { key: 'beschreibung', width: 45 },
+    { key: 'beschreibung', width: 48 },
     { key: 'foto1', width: photoColW },
     { key: 'foto2', width: photoColW },
     { key: 'datum', width: 12 },
   ];
   ws.columns = columns;
   const colCount = columns.length;
+  const colIndexOf = (key) => columns.findIndex(c => c.key === key);
+
+  const NAVY = 'FF1E293B';
+  const BLUE = 'FF2563EB';
+  const BLUE_LIGHT = 'FFEFF4FF';
+  const ROOM_BAND = 'FFDCE7FA';
+  const STRIPE = 'FFF7F9FC';
+  const BORDER = 'FFE2E8F0';
+  const thinBorder = { style: 'thin', color: { argb: BORDER } };
+  const cellBorder = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
 
   ws.mergeCells(1, 1, 1, colCount);
   const titleCell = ws.getCell(1, 1);
   titleCell.value = activeList && activeList.title ? `Mängelliste – ${activeList.title}` : 'Mängelliste';
-  titleCell.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
-  titleCell.alignment = { vertical: 'middle' };
-  ws.getRow(1).height = 28;
-  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
+  titleCell.font = { bold: true, size: 18, color: { argb: 'FFFFFFFF' } };
+  titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  ws.getRow(1).height = 34;
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
 
+  const sortLabel = { manual: 'Reihenfolge', ort: 'nach Ort/Bereich gruppiert', text: 'alphabetisch (A–Z)' }[sortMode] || '';
   ws.mergeCells(2, 1, 2, colCount);
   const subCell = ws.getCell(2, 1);
-  subCell.value = `Erstellt am ${new Date().toLocaleDateString('de-DE')} · ${cache.length} Punkt(e)`;
+  subCell.value = `Erstellt am ${new Date().toLocaleDateString('de-DE')} · ${cache.length} Punkt(e) · Sortierung: ${sortLabel}`;
   subCell.font = { italic: true, size: 10, color: { argb: 'FFFFFFFF' } };
-  subCell.alignment = { vertical: 'middle' };
-  ws.getRow(2).height = 18;
-  ws.getRow(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+  subCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+  ws.getRow(2).height = 20;
+  ws.getRow(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLUE } };
 
   const headerRowIdx = 3;
   const headerRow = ws.getRow(headerRowIdx);
   headerRow.values = ['Nr.', 'Arbeitsgattung', 'Ort / Bereich', 'Beschreibung', 'Foto 1', 'Foto 2', 'Datum'];
-  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
-  headerRow.alignment = { vertical: 'middle' };
-  headerRow.height = 20;
+  headerRow.font = { bold: true, size: 11, color: { argb: 'FFFFFFFF' } };
+  headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLUE } };
+  headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+  headerRow.getCell(colIndexOf('beschreibung') + 1).alignment = { vertical: 'middle', horizontal: 'left' };
+  headerRow.height = 22;
+  headerRow.eachCell(cell => { cell.border = cellBorder; });
 
-  ws.views = [{ state: 'frozen', ySplit: headerRowIdx }];
+  ws.views = [{ showGridLines: false, state: 'frozen', ySplit: headerRowIdx }];
   ws.autoFilter = { from: { row: headerRowIdx, column: 1 }, to: { row: headerRowIdx, column: colCount } };
+  ws.pageSetup.printTitlesRow = `${headerRowIdx}:${headerRowIdx}`;
 
-  const thinBorder = { style: 'thin', color: { argb: 'FFE2E8F0' } };
+  let rowIdx = headerRowIdx;
+  let nr = 0;
+  let lastGroupKey; // nur relevant bei sortMode === 'ort'
 
-  for (let i = 0; i < cache.length; i++) {
-    const e = cache[i];
-    const rowIdx = headerRowIdx + 1 + i;
+  for (const e of displayEntries) {
+    if (sortMode === 'ort') {
+      const groupKey = e.ort || 'Ohne Ortsangabe';
+      if (groupKey !== lastGroupKey) {
+        lastGroupKey = groupKey;
+        rowIdx++;
+        ws.mergeCells(rowIdx, 1, rowIdx, colCount);
+        const groupCell = ws.getCell(rowIdx, 1);
+        groupCell.value = `📍 ${groupKey}`;
+        groupCell.font = { bold: true, size: 11, color: { argb: NAVY } };
+        groupCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        ws.getRow(rowIdx).height = 22;
+        ws.getRow(rowIdx).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ROOM_BAND } };
+      }
+    }
+
+    rowIdx++;
+    nr++;
     const row = ws.getRow(rowIdx);
     row.values = {
-      nr: i + 1,
+      nr,
       gattung: e.gattung || '',
       ort: e.ort || '',
       beschreibung: e.rohtext,
@@ -908,13 +953,19 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
       datum: formatDate(e.timestamp),
     };
     row.alignment = { vertical: 'middle', wrapText: true };
-    row.eachCell({ includeEmpty: true }, cell => {
-      cell.border = { top: thinBorder, bottom: thinBorder, left: thinBorder, right: thinBorder };
-    });
-    if (i % 2 === 1) {
+    row.getCell(colIndexOf('nr') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
+    row.getCell(colIndexOf('datum') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
+    row.getCell(colIndexOf('foto1') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
+    row.getCell(colIndexOf('foto2') + 1).alignment = { vertical: 'middle', horizontal: 'center' };
+    row.eachCell({ includeEmpty: true }, cell => { cell.border = cellBorder; });
+    if (nr % 2 === 0) {
       row.eachCell({ includeEmpty: true }, cell => {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F6FB' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: STRIPE } };
       });
+    }
+    if (e.gattung) {
+      row.getCell(colIndexOf('gattung') + 1).font = { color: { argb: BLUE }, bold: true, size: 10 };
+      row.getCell(colIndexOf('gattung') + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLUE_LIGHT } };
     }
 
     let maxImgH = 20;
@@ -925,7 +976,7 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
         const dims = await getImageDimensions(photo);
         const imgH = imgW * (dims.height / dims.width);
         const imageId = wb.addImage({ base64: photo, extension: 'jpeg' });
-        const colIndex = columns.findIndex(c => c.key === colKey);
+        const colIndex = colIndexOf(colKey);
         ws.addImage(imageId, { tl: { col: colIndex, row: rowIdx - 1 }, ext: { width: imgW, height: imgH } });
         maxImgH = Math.max(maxImgH, imgH * 0.75);
       } catch (err) { /* Foto überspringen */ }
@@ -933,10 +984,37 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
     row.height = maxImgH;
   }
 
+  // Schreibschutz: alle Zellen sind in ExcelJS standardmäßig "locked" –
+  // erst das Schützen des Arbeitsblatts aktiviert das auch tatsächlich.
+  // Kein starker Verschlüsselungsschutz, sondern wie Excels "Blatt schützen".
+  let usedPassword = null;
+  if (Settings.xlsxProtect) {
+    usedPassword = Settings.xlsxPassword || DEFAULT_XLSX_PASSWORD;
+    await ws.protect(usedPassword, {
+      selectLockedCells: true,
+      selectUnlockedCells: true,
+      formatCells: false,
+      formatColumns: false,
+      formatRows: false,
+      insertColumns: false,
+      insertRows: false,
+      insertHyperlinks: false,
+      deleteColumns: false,
+      deleteRows: false,
+      sort: false,
+      autoFilter: true,
+      pivotTables: false,
+      objects: false,
+      scenarios: false,
+    });
+  }
+
   const buf = await wb.xlsx.writeBuffer();
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   downloadBlob(blob, xlsxFileName());
-  showToast('Excel-Datei mit Fotos gespeichert.');
+  showToast(usedPassword
+    ? `Excel-Datei gespeichert – schreibgeschützt (Passwort: ${usedPassword}).`
+    : 'Excel-Datei mit Fotos gespeichert.', 4500);
 });
 
 /* ---------- Backup: Sichern (JSON inkl. Fotos) ---------- */

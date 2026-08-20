@@ -506,7 +506,7 @@ function makeDraggable(li) {
   let pointerId = null;
 
   function onMove(e) {
-    if (pointerId === null) return;
+    if (pointerId === null || e.pointerId !== pointerId) return;
     // li bleibt im normalen Fluss der Liste, scrollt also automatisch mit der
     // Seite mit; translateY ist nur der Offset relativ zur Startposition.
     li.style.transform = `translateY(${e.clientY - startY}px)`;
@@ -523,29 +523,38 @@ function makeDraggable(li) {
     }
   }
 
-  function onUp() {
-    if (pointerId === null) return;
-    try { handle.releasePointerCapture(pointerId); } catch {}
+  function onUp(e) {
+    if (pointerId === null || (e && e.pointerId !== undefined && e.pointerId !== pointerId)) return;
     pointerId = null;
     autoScroller.stop();
     li.classList.remove('dragging');
     li.style.transform = '';
-    handle.removeEventListener('pointermove', onMove);
-    handle.removeEventListener('pointerup', onUp);
-    handle.removeEventListener('pointercancel', onUp);
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointercancel', onUp);
+    window.removeEventListener('blur', onUp);
     persistNewOrder();
   }
 
   handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return; // nur linke Maustaste / primärer Touch
     e.preventDefault();
     pointerId = e.pointerId;
     startY = e.clientY;
     li.classList.add('dragging');
-    handle.setPointerCapture(pointerId);
     autoScroller.start();
-    handle.addEventListener('pointermove', onMove);
-    handle.addEventListener('pointerup', onUp);
-    handle.addEventListener('pointercancel', onUp);
+    // Bewusst NICHT setPointerCapture(handle): wird die Karte während des
+    // Ziehens im DOM neu einsortiert (list.insertBefore), geben manche
+    // Browser die Pointer-Capture unbemerkt frei – danach kommt kein
+    // pointerup mehr an, Auto-Scroll läuft endlos weiter und die Karte
+    // bleibt "hängen" (blockiert die Seite). Listener auf document sind
+    // davon unabhängig und funktionieren unabhängig von Capture-Verlust.
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+    // Sicherheitsnetz: falls der Browser das pointerup verschluckt (z. B.
+    // Fenster verliert beim Loslassen den Fokus), Drag trotzdem beenden.
+    window.addEventListener('blur', onUp);
   });
 }
 

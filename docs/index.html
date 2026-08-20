@@ -21,6 +21,14 @@
 </header>
 <input type="file" id="importInput" accept=".xlsx,.xls,.json" hidden>
 
+<div class="list-bar">
+  <button id="listSwitchBtn" class="list-switch-btn" title="Liste wechseln">
+    <span class="list-switch-label">Liste:</span>
+    <span id="activeListTitle">Mängelliste</span>
+    <span class="list-switch-caret">▾</span>
+  </button>
+</div>
+
 <main id="listView" class="view">
   <div id="emptyState" class="empty-state">
     <p>Noch keine Mängel erfasst.</p>
@@ -99,8 +107,7 @@
     <input type="email" id="emailInput" placeholder="empfaenger@beispiel.de" class="text-input" autocomplete="off">
     <p class="hint-block">Wird beim E-Mail-Export als Empfänger vorausgefüllt.</p>
 
-    <label class="field-label" for="firmaInput">Absender / Projekt-Titel (optional)</label>
-    <input type="text" id="firmaInput" placeholder="z. B. Wohnung Musterstr. 5" class="text-input">
+    <p class="hint-block">Der Titel im PDF-/Excel-Export richtet sich nach der aktiven Liste. Liste umbenennen: oben auf „Liste: …“ tippen, dann ✏️.</p>
 
     <label class="field-label">Fotogröße im Export</label>
     <div id="photoSizeChooser" class="photosize-chooser">
@@ -123,6 +130,15 @@
     <p class="hint-block">Gilt für PDF- und Excel-Export. Kleinere Fotos = weniger Seiten.</p>
   </div>
 </section>
+
+<div id="listsModal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <h3>Listen</h3>
+    <ul id="listsUl" class="lists-ul"></ul>
+    <button type="button" id="newListBtn" class="modal-option">➕ Neue Liste anlegen</button>
+    <button type="button" id="listsModalCancel" class="modal-cancel">Schließen</button>
+  </div>
+</div>
 
 <div id="emailChooser" class="modal-overlay hidden">
   <div class="modal-card">

@@ -50,6 +50,68 @@ html, body {
 }
 .icon-btn:active { background: rgba(255,255,255,0.32); }
 
+.list-bar {
+  position: sticky;
+  top: 0;
+  z-index: 9;
+  padding: 10px 14px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+.list-switch-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 0.98rem;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.list-switch-btn:active { background: var(--border); }
+.list-switch-label { color: var(--muted); font-weight: 600; }
+#activeListTitle { font-weight: 700; flex: 1; }
+.list-switch-caret { color: var(--muted); }
+
+.lists-ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; }
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px;
+  background: var(--bg);
+}
+.list-row.active { border-color: var(--primary); background: #eef2ff; }
+.list-row-main {
+  flex: 1;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 10px 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text);
+}
+.list-row-count { font-weight: 400; color: var(--muted); font-size: 0.9rem; }
+.list-row-icon {
+  border: none;
+  background: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  font-size: 1.05rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.list-row-icon:active { background: var(--border); }
+
 main.view {
   padding: 14px 14px 210px;
   min-height: 60vh;
@@ -364,4 +426,5 @@ main.view {
   main.view, .sheet-body { max-width: 620px; margin: 0 auto; }
   .app-header > * { max-width: 620px; }
   .export-bar { max-width: 620px; margin: 0 auto; left: 0; right: 0; }
+  .list-bar > * { max-width: 620px; margin: 0 auto; }
 }

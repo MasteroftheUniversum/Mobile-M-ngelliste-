@@ -11,8 +11,6 @@ if ('serviceWorker' in navigator) {
 const Settings = {
   get email() { return localStorage.getItem('ml_email') || ''; },
   set email(v) { localStorage.setItem('ml_email', v || ''); },
-  get firma() { return localStorage.getItem('ml_firma') || ''; },
-  set firma(v) { localStorage.setItem('ml_firma', v || ''); },
   get photoSize() { return localStorage.getItem('ml_photoSize') || 'mittel'; },
   set photoSize(v) { localStorage.setItem('ml_photoSize', v); },
 };
@@ -70,17 +68,57 @@ function refreshHistoryDatalists() {
 /* ---------- IndexedDB ---------- */
 const DB_NAME = 'maengelliste';
 const STORE = 'entries';
+const LISTS_STORE = 'lists';
+const DB_VERSION = 2;
+const DEFAULT_LIST_ID = 'default';
 let dbPromise = null;
 
 function openDb() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (event) => {
       const db = req.result;
+      const tx = req.transaction;
+
+      let entryStore;
       if (!db.objectStoreNames.contains(STORE)) {
-        const store = db.createObjectStore(STORE, { keyPath: 'id' });
-        store.createIndex('timestamp', 'timestamp');
+        entryStore = db.createObjectStore(STORE, { keyPath: 'id' });
+        entryStore.createIndex('timestamp', 'timestamp');
+      } else {
+        entryStore = tx.objectStore(STORE);
+      }
+      if (!entryStore.indexNames.contains('listId')) {
+        entryStore.createIndex('listId', 'listId');
+      }
+
+      let listStore;
+      if (!db.objectStoreNames.contains(LISTS_STORE)) {
+        listStore = db.createObjectStore(LISTS_STORE, { keyPath: 'id' });
+      } else {
+        listStore = tx.objectStore(LISTS_STORE);
+      }
+
+      // Migration von v1 (eine einzige Liste) auf v2 (mehrere Listen):
+      // bestehende Einträge ohne listId bekommen eine Standardliste zugewiesen.
+      if (event.oldVersion < 2) {
+        const legacyTitle = localStorage.getItem('ml_firma') || 'Mängelliste';
+        listStore.get(DEFAULT_LIST_ID).onsuccess = (ev) => {
+          if (!ev.target.result) {
+            listStore.put({ id: DEFAULT_LIST_ID, title: legacyTitle, createdAt: Date.now() });
+          }
+        };
+        entryStore.openCursor().onsuccess = (ev) => {
+          const cursor = ev.target.result;
+          if (cursor) {
+            const val = cursor.value;
+            if (!val.listId) {
+              val.listId = DEFAULT_LIST_ID;
+              cursor.update(val);
+            }
+            cursor.continue();
+          }
+        };
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -103,7 +141,8 @@ async function dbAll() {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).getAll();
+    const idx = tx.objectStore(STORE).index('listId');
+    const req = idx.getAll(IDBKeyRange.only(activeListId));
     req.onsuccess = () => resolve(req.result.map(normalizeEntry).sort((a, b) => a.order - b.order));
     req.onerror = () => reject(req.error);
   });
@@ -132,6 +171,175 @@ async function dbDelete(id) {
     tx.onerror = () => reject(tx.error);
   });
 }
+
+async function dbDeleteAllForList(listId) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const idx = tx.objectStore(STORE).index('listId');
+    const req = idx.openCursor(IDBKeyRange.only(listId));
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor) { cursor.delete(); cursor.continue(); }
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function dbCountForList(listId) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const idx = tx.objectStore(STORE).index('listId');
+    const req = idx.count(IDBKeyRange.only(listId));
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/* ---------- Listen (mehrere Mängellisten) ---------- */
+let activeListId = localStorage.getItem('ml_activeListId') || null;
+let activeList = null;
+
+async function dbListsAll() {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(LISTS_STORE, 'readonly');
+    const req = tx.objectStore(LISTS_STORE).getAll();
+    req.onsuccess = () => resolve(req.result.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)));
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbListPut(list) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(LISTS_STORE, 'readwrite');
+    tx.objectStore(LISTS_STORE).put(list);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function dbListDelete(id) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(LISTS_STORE, 'readwrite');
+    tx.objectStore(LISTS_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function loadActiveList() {
+  let lists = await dbListsAll();
+  if (lists.length === 0) {
+    const def = { id: DEFAULT_LIST_ID, title: localStorage.getItem('ml_firma') || 'Mängelliste', createdAt: Date.now() };
+    await dbListPut(def);
+    lists = [def];
+  }
+  if (!activeListId || !lists.some(l => l.id === activeListId)) {
+    activeListId = lists[0].id;
+    localStorage.setItem('ml_activeListId', activeListId);
+  }
+  activeList = lists.find(l => l.id === activeListId);
+  document.getElementById('activeListTitle').textContent = activeList.title;
+}
+
+async function renderListsModal() {
+  const lists = await dbListsAll();
+  const ul = document.getElementById('listsUl');
+  ul.innerHTML = '';
+  for (const l of lists) {
+    const count = await dbCountForList(l.id);
+    const li = document.createElement('li');
+    li.className = 'list-row' + (l.id === activeListId ? ' active' : '');
+    li.dataset.id = l.id;
+    li.innerHTML = `
+      <button class="list-row-main" data-action="switch" type="button">${escapeHtml(l.title)} <span class="list-row-count">(${count})</span></button>
+      <button class="list-row-icon" data-action="rename" type="button" title="Umbenennen" aria-label="Liste umbenennen">✏️</button>
+      <button class="list-row-icon" data-action="clear" type="button" title="Liste leeren" aria-label="Liste leeren">🧹</button>
+      <button class="list-row-icon" data-action="delete" type="button" title="Liste löschen" aria-label="Liste löschen">🗑️</button>`;
+    ul.appendChild(li);
+  }
+}
+
+document.getElementById('listSwitchBtn').addEventListener('click', async () => {
+  await renderListsModal();
+  document.getElementById('listsModal').classList.remove('hidden');
+});
+document.getElementById('listsModalCancel').addEventListener('click', () => {
+  document.getElementById('listsModal').classList.add('hidden');
+});
+document.getElementById('listsModal').addEventListener('click', (e) => {
+  if (e.target.id === 'listsModal') document.getElementById('listsModal').classList.add('hidden');
+});
+
+document.getElementById('newListBtn').addEventListener('click', async () => {
+  const title = prompt('Titel der neuen Liste (z. B. Projektname):', '');
+  if (title === null) return;
+  const list = { id: uid(), title: title.trim() || 'Neue Liste', createdAt: Date.now() };
+  await dbListPut(list);
+  activeListId = list.id;
+  localStorage.setItem('ml_activeListId', activeListId);
+  await loadActiveList();
+  document.getElementById('listsModal').classList.add('hidden');
+  refreshList();
+  showToast('Neue Liste angelegt.');
+});
+
+document.getElementById('listsUl').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const row = btn.closest('.list-row');
+  const id = row.dataset.id;
+  const action = btn.dataset.action;
+  const lists = await dbListsAll();
+  const list = lists.find(l => l.id === id);
+  if (!list) return;
+
+  if (action === 'switch') {
+    activeListId = id;
+    localStorage.setItem('ml_activeListId', id);
+    await loadActiveList();
+    document.getElementById('listsModal').classList.add('hidden');
+    refreshList();
+  } else if (action === 'rename') {
+    const newTitle = prompt('Neuer Titel für diese Liste:', list.title);
+    if (newTitle && newTitle.trim()) {
+      list.title = newTitle.trim();
+      await dbListPut(list);
+      if (id === activeListId) await loadActiveList();
+      renderListsModal();
+    }
+  } else if (action === 'clear') {
+    if (confirm(`Alle Einträge in „${list.title}“ wirklich löschen? Die Liste selbst bleibt bestehen.`)) {
+      await dbDeleteAllForList(id);
+      if (id === activeListId) refreshList();
+      renderListsModal();
+      showToast('Liste geleert.');
+    }
+  } else if (action === 'delete') {
+    if (lists.length <= 1) {
+      showToast('Mindestens eine Liste muss bestehen bleiben.');
+      return;
+    }
+    if (confirm(`Liste „${list.title}“ inkl. aller Einträge wirklich löschen?`)) {
+      await dbDeleteAllForList(id);
+      await dbListDelete(id);
+      if (id === activeListId) {
+        const remaining = await dbListsAll();
+        activeListId = remaining[0].id;
+        localStorage.setItem('ml_activeListId', activeListId);
+        await loadActiveList();
+        refreshList();
+      }
+      renderListsModal();
+      showToast('Liste gelöscht.');
+    }
+  }
+});
 
 /* ---------- Utilities ---------- */
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
@@ -249,25 +457,67 @@ function persistNewOrder() {
   });
 }
 
+// Findet die Zielposition anhand der vertikalen Mitte jeder Karte statt eines
+// einzelnen (x,y)-Treffpunkts. So wird auch getroffen, wenn der Zeigepunkt
+// zwischen zwei Karten (im Abstand) oder über einem Foto/Icon liegt.
+function findDropTarget(list, dragged, clientY) {
+  const siblings = Array.from(list.children).filter(c => c !== dragged);
+  for (const sib of siblings) {
+    const rect = sib.getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) return sib;
+  }
+  return null; // ans Ende einsortieren
+}
+
+// Scrollt die Seite automatisch weiter, wenn beim Ziehen der Rand des
+// Bildschirms erreicht wird (z. B. um einen Eintrag ans Ende einer langen
+// Liste zu verschieben, die nicht komplett sichtbar ist).
+function makeAutoScroller() {
+  const EDGE = 90;
+  const MAX_SPEED = 16;
+  let clientY = null;
+  let rafId = null;
+
+  function tick() {
+    if (clientY !== null) {
+      const vh = window.innerHeight;
+      let dy = 0;
+      if (clientY < EDGE) {
+        dy = -MAX_SPEED * (1 - clientY / EDGE);
+      } else if (clientY > vh - EDGE) {
+        dy = MAX_SPEED * (1 - (vh - clientY) / EDGE);
+      }
+      if (dy !== 0) window.scrollBy(0, dy);
+    }
+    rafId = requestAnimationFrame(tick);
+  }
+
+  return {
+    start() { if (rafId === null) rafId = requestAnimationFrame(tick); },
+    update(y) { clientY = y; },
+    stop() { if (rafId !== null) cancelAnimationFrame(rafId); rafId = null; clientY = null; },
+  };
+}
+
 function makeDraggable(li) {
   const handle = li.querySelector('.drag-handle');
+  const autoScroller = makeAutoScroller();
   let startY = 0;
   let pointerId = null;
 
   function onMove(e) {
     if (pointerId === null) return;
-    const dy = e.clientY - startY;
-    li.style.transform = `translateY(${dy}px)`;
+    // li bleibt im normalen Fluss der Liste, scrollt also automatisch mit der
+    // Seite mit; translateY ist nur der Offset relativ zur Startposition.
+    li.style.transform = `translateY(${e.clientY - startY}px)`;
 
-    li.style.pointerEvents = 'none';
-    const centerX = li.getBoundingClientRect().left + 30;
-    const target = document.elementFromPoint(centerX, e.clientY)?.closest('.entry-card');
-    li.style.pointerEvents = '';
+    autoScroller.update(e.clientY);
 
-    if (target && target !== li && target.parentElement === li.parentElement) {
-      const rect = target.getBoundingClientRect();
-      const before = e.clientY < rect.top + rect.height / 2;
-      target.parentElement.insertBefore(li, before ? target : target.nextSibling);
+    const list = li.parentElement;
+    const target = findDropTarget(list, li, e.clientY);
+    if (target !== li.nextSibling && target !== li) {
+      if (target) list.insertBefore(li, target);
+      else list.appendChild(li);
       startY = e.clientY;
       li.style.transform = 'translateY(0px)';
     }
@@ -277,6 +527,7 @@ function makeDraggable(li) {
     if (pointerId === null) return;
     try { handle.releasePointerCapture(pointerId); } catch {}
     pointerId = null;
+    autoScroller.stop();
     li.classList.remove('dragging');
     li.style.transform = '';
     handle.removeEventListener('pointermove', onMove);
@@ -291,6 +542,7 @@ function makeDraggable(li) {
     startY = e.clientY;
     li.classList.add('dragging');
     handle.setPointerCapture(pointerId);
+    autoScroller.start();
     handle.addEventListener('pointermove', onMove);
     handle.addEventListener('pointerup', onUp);
     handle.addEventListener('pointercancel', onUp);
@@ -387,6 +639,7 @@ document.getElementById('editorSave').addEventListener('click', async () => {
   const existing = editingId ? cache.find(e => e.id === editingId) : null;
   const entry = {
     id: editingId || uid(),
+    listId: existing ? (existing.listId || activeListId) : activeListId,
     timestamp: existing ? existing.timestamp : Date.now(),
     order: existing ? existing.order : nextOrder(),
     ort,
@@ -408,14 +661,12 @@ document.getElementById('editorSave').addEventListener('click', async () => {
 /* ---------- Settings ---------- */
 document.getElementById('settingsBtn').addEventListener('click', () => {
   document.getElementById('emailInput').value = Settings.email;
-  document.getElementById('firmaInput').value = Settings.firma;
   renderPhotoSizeChooser();
   showView('settings');
 });
 document.getElementById('settingsCancel').addEventListener('click', () => showView('list'));
 document.getElementById('settingsSave').addEventListener('click', () => {
   Settings.email = document.getElementById('emailInput').value.trim();
-  Settings.firma = document.getElementById('firmaInput').value.trim();
   showView('list');
   showToast('Einstellungen gespeichert.');
 });
@@ -431,7 +682,7 @@ function buildPdf() {
 
   const photoWidth = PHOTO_SIZES[Settings.photoSize].pdfWidth;
 
-  const title = Settings.firma ? `Mängelliste – ${Settings.firma}` : 'Mängelliste';
+  const title = activeList && activeList.title ? `Mängelliste – ${activeList.title}` : 'Mängelliste';
   doc.setFontSize(18);
   const titleLines = doc.splitTextToSize(title, pageW - 2 * margin);
   doc.text(titleLines, margin, y);
@@ -492,7 +743,7 @@ function buildPdf() {
 
 function pdfFileName() {
   const stamp = new Date().toISOString().slice(0, 10);
-  const base = (Settings.firma || 'Maengelliste').replace(/[^a-z0-9äöüß_\- ]/gi, '').trim() || 'Maengelliste';
+  const base = ((activeList && activeList.title) || 'Maengelliste').replace(/[^a-z0-9äöüß_\- ]/gi, '').trim() || 'Maengelliste';
   return `${base}_${stamp}.pdf`;
 }
 
@@ -525,7 +776,7 @@ function getImageDimensions(dataUrl) {
 
 function xlsxFileName() {
   const stamp = new Date().toISOString().slice(0, 10);
-  const base = (Settings.firma || 'Maengelliste').replace(/[^a-z0-9äöüß_\- ]/gi, '').trim() || 'Maengelliste';
+  const base = ((activeList && activeList.title) || 'Maengelliste').replace(/[^a-z0-9äöüß_\- ]/gi, '').trim() || 'Maengelliste';
   return `${base}_${stamp}.xlsx`;
 }
 
@@ -555,7 +806,7 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
 
   ws.mergeCells(1, 1, 1, colCount);
   const titleCell = ws.getCell(1, 1);
-  titleCell.value = Settings.firma ? `Mängelliste – ${Settings.firma}` : 'Mängelliste';
+  titleCell.value = activeList && activeList.title ? `Mängelliste – ${activeList.title}` : 'Mängelliste';
   titleCell.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
   titleCell.alignment = { vertical: 'middle' };
   ws.getRow(1).height = 28;
@@ -630,7 +881,7 @@ document.getElementById('exportXlsxBtn').addEventListener('click', async () => {
 /* ---------- Backup: Sichern (JSON inkl. Fotos) ---------- */
 function backupFileName() {
   const stamp = new Date().toISOString().slice(0, 10);
-  const base = (Settings.firma || 'Maengelliste').replace(/[^a-z0-9äöüß_\- ]/gi, '').trim() || 'Maengelliste';
+  const base = ((activeList && activeList.title) || 'Maengelliste').replace(/[^a-z0-9äöüß_\- ]/gi, '').trim() || 'Maengelliste';
   return `${base}_Backup_${stamp}.json`;
 }
 
@@ -668,7 +919,7 @@ document.querySelectorAll('.modal-option').forEach(btn => {
 async function sendEmail(mode) {
   const doc = buildPdf();
   const fileName = pdfFileName();
-  const subject = Settings.firma ? `Mängelliste – ${Settings.firma}` : 'Mängelliste';
+  const subject = activeList && activeList.title ? `Mängelliste – ${activeList.title}` : 'Mängelliste';
   const bodyLines = cache.map((e, i) => `${i + 1}. ${e.ort ? e.ort + ': ' : ''}${e.rohtext}`);
   const body = bodyLines.join('\n');
 
@@ -761,7 +1012,7 @@ async function importExcel(file) {
     const dateStr = cellValue(row, 'Datum');
     const timestamp = parseGermanDate(dateStr) ?? (Date.now() + imported);
 
-    const entry = { id: uid(), timestamp, order: base + imported, ort, gattung, rohtext, photos: [] };
+    const entry = { id: uid(), listId: activeListId, timestamp, order: base + imported, ort, gattung, rohtext, photos: [] };
     await dbPut(entry);
     addHistory('ml_ortHistory', ort);
     addHistory('ml_gattungHistory', gattung);
@@ -785,6 +1036,7 @@ async function importBackup(file) {
     const photos = Array.isArray(e.photos) ? e.photos.filter(Boolean).slice(0, 2) : (e.photo ? [e.photo] : []);
     const entry = {
       id: uid(),
+      listId: activeListId,
       timestamp: e.timestamp || Date.now(),
       order: base + imported,
       ort: e.ort || '',
@@ -804,4 +1056,7 @@ async function importBackup(file) {
 }
 
 /* ---------- Init ---------- */
-refreshList();
+(async () => {
+  await loadActiveList();
+  refreshList();
+})();

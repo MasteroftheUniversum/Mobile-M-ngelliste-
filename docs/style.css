@@ -54,12 +54,16 @@ html, body {
   position: sticky;
   top: 0;
   z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 10px 14px;
   background: var(--card);
   border-bottom: 1px solid var(--border);
 }
 .list-switch-btn {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -72,10 +76,34 @@ html, body {
   cursor: pointer;
   text-align: left;
 }
+.sort-select {
+  flex-shrink: 0;
+  max-width: 42%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 10px 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
 .list-switch-btn:active { background: var(--border); }
-.list-switch-label { color: var(--muted); font-weight: 600; }
-#activeListTitle { font-weight: 700; flex: 1; }
-.list-switch-caret { color: var(--muted); }
+.list-switch-label { color: var(--muted); font-weight: 600; flex-shrink: 0; }
+#activeListTitle { font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-switch-caret { color: var(--muted); flex-shrink: 0; }
+
+.group-header {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 8px;
+  padding: 0 4px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.group-header:first-child { margin-top: 0; }
 
 .lists-ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; }
 .list-row {

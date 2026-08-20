@@ -393,6 +393,42 @@ function showView(name) {
 /* ---------- List rendering ---------- */
 let cache = [];
 
+// Sortierung/Gruppierung ist rein fürs Anzeigen – die gespeicherte
+// manuelle Reihenfolge (entry.order) bleibt dabei unangetastet, damit man
+// jederzeit zurück zu "Manuell" wechseln kann, ohne etwas zu verlieren.
+let sortMode = localStorage.getItem('ml_sortMode') || 'manual';
+if (!['manual', 'ort', 'text'].includes(sortMode)) sortMode = 'manual';
+
+function localeCompareDe(a, b) {
+  return (a || '').localeCompare(b || '', 'de', { sensitivity: 'base', numeric: true });
+}
+
+function sortedForDisplay(entries, mode) {
+  const arr = entries.slice();
+  if (mode === 'text') {
+    arr.sort((a, b) => localeCompareDe(a.rohtext, b.rohtext));
+  } else if (mode === 'ort') {
+    arr.sort((a, b) => {
+      const oa = a.ort || '';
+      const ob = b.ort || '';
+      if (!oa && ob) return 1;
+      if (oa && !ob) return -1;
+      const c = localeCompareDe(oa, ob);
+      if (c !== 0) return c;
+      return localeCompareDe(a.rohtext, b.rohtext);
+    });
+  }
+  return arr;
+}
+
+const sortModeSelect = document.getElementById('sortModeSelect');
+sortModeSelect.value = sortMode;
+sortModeSelect.addEventListener('change', () => {
+  sortMode = sortModeSelect.value;
+  localStorage.setItem('ml_sortMode', sortMode);
+  refreshList();
+});
+
 async function refreshList() {
   cache = await dbAll();
   const list = document.getElementById('entryList');
@@ -407,13 +443,29 @@ async function refreshList() {
   }
   empty.classList.add('hidden');
   exportBar.classList.remove('hidden');
-  cache.forEach(entry => {
+
+  const manual = sortMode === 'manual';
+  const displayEntries = manual ? cache : sortedForDisplay(cache, sortMode);
+  let lastGroupKey;
+
+  displayEntries.forEach(entry => {
+    if (sortMode === 'ort') {
+      const groupKey = entry.ort || 'Ohne Ortsangabe';
+      if (groupKey !== lastGroupKey) {
+        lastGroupKey = groupKey;
+        const header = document.createElement('li');
+        header.className = 'group-header';
+        header.textContent = groupKey;
+        list.appendChild(header);
+      }
+    }
+
     const li = document.createElement('li');
     li.className = 'entry-card';
     li.dataset.id = entry.id;
     const photosHtml = entry.photos.map(p => `<img src="${p}" alt="">`).join('');
     li.innerHTML = `
-      <span class="drag-handle" title="Ziehen zum Verschieben" aria-label="Ziehen zum Verschieben">≡</span>
+      ${manual ? `<span class="drag-handle" title="Ziehen zum Verschieben" aria-label="Ziehen zum Verschieben">≡</span>` : ''}
       ${photosHtml ? `<div class="entry-photos">${photosHtml}</div>` : ''}
       <div class="entry-body">
         <div class="entry-tags">
@@ -434,7 +486,7 @@ async function refreshList() {
         refreshList();
       }
     });
-    makeDraggable(li);
+    if (manual) makeDraggable(li);
     list.appendChild(li);
   });
 }
